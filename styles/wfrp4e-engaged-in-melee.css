@@ -1,0 +1,44 @@
+/* WFRP4e Outnumbering - chat card and HUD styling.
+ *
+ * Uses the WFRP4e parchment palette to blend in with the system's stock UI.
+ * Colors are pulled from the system stylesheet variables where available, with
+ * literal fallbacks.
+ */
+
+.wfrp4e-engaged-in-melee-breakdown {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(120, 80, 30, 0.08);
+  border-left: 3px solid #8b5a2b;
+  border-radius: 2px;
+  font-family: var(--font-primary, "Signika", sans-serif);
+  font-size: 12px;
+  line-height: 1.4;
+  color: #3a2a18;
+}
+
+.wfrp4e-engaged-in-melee-breakdown .outnumbering-header {
+  font-weight: bold;
+  color: #6b3410;
+  margin-bottom: 2px;
+}
+
+.wfrp4e-engaged-in-melee-breakdown .outnumbering-header i {
+  margin-right: 4px;
+}
+
+.wfrp4e-engaged-in-melee-breakdown .outnumbering-detail {
+  font-size: 11px;
+  color: #5a3e22;
+}
+
+/* Token HUD: Disengage button. The HUD uses .control-icon for its buttons,
+ * which already provides the basic round shape and hover state. We only
+ * override the icon color so it reads as a "leave combat" action. */
+.control-icon.wfrp4e-engaged-in-melee-disengage i {
+  color: #c0392b;
+}
+
+.control-icon.wfrp4e-engaged-in-melee-disengage:hover i {
+  color: #e74c3c;
+}

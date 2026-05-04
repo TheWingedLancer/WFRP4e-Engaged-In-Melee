@@ -1,0 +1,26 @@
+{
+  "wfrp4e-engaged-in-melee": {
+    "settings": {
+      "enableAutoTracking": {
+        "name": "Auto-disengage on movement",
+        "hint": "If enabled, tokens that move further than the disengage distance from an engaged opponent automatically lose that engagement. Disable if you prefer purely manual control."
+      },
+      "autoDisengageDistance": {
+        "name": "Minimum auto-disengage distance (yards)",
+        "hint": "Floor for the auto-disengage threshold. The actual threshold is the maximum of this value and the longer of the two combatants' equipped weapon reaches (Very Long = 4 yds, Massive = 6 yds, all others = 2 yds per Core p.297). Default 2 yards."
+      },
+      "debug": {
+        "name": "Debug logging",
+        "hint": "Log engagement state changes and outnumbering calculations to the console."
+      }
+    },
+    "chat": {
+      "header": "Outnumbering: +{bonus} to hit",
+      "detail": "{attacker}'s side ({attackerCount}) vs {defender}'s side ({defenderCount}) — ratio {ratio}"
+    },
+    "hud": {
+      "disengageTooltip": "Disengage from all opponents",
+      "disengageMessage": "{name} has disengaged from all opponents."
+    }
+  }
+}

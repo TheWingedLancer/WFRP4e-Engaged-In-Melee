@@ -1,0 +1,15 @@
+# Foundry / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Build / dev
+node_modules/
+*.log
+dist/
+
+# Local testing artifacts
+preflight.mjs
+test*.mjs

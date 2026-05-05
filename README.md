@@ -95,6 +95,17 @@ Hook integration:
 
 MIT. See LICENSE.
 
+## Releasing (for maintainers)
+
+This repo includes a GitHub Actions workflow at `.github/workflows/release.yml` that handles the release-build flow. To cut a new release:
+
+1. Bump the `version` field in `module.json` (e.g. `0.1.3` → `0.1.4`).
+2. Commit and push to `main`.
+3. Tag the commit: `git tag v0.1.4 && git push --tags`.
+4. The workflow runs automatically: it verifies the tag matches the version, builds `module.zip` with `module.json` at the root, and creates a GitHub Release with both files attached.
+
+Foundry's update mechanism will then pick it up via the `manifest` URL pointing at `main/module.json`.
+
 ## Credits
 
 Built by [TheWingedLancer](https://github.com/TheWingedLancer). Warhammer Fantasy Roleplay © Games Workshop. WFRP4e is published by Cubicle 7.

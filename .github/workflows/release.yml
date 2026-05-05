@@ -1,0 +1,96 @@
+name: Release Module
+
+# Triggered by pushing a tag of the form v0.1.2, v0.1.3, etc.
+# Creates a GitHub Release with module.zip attached, structured so that
+# Foundry's auto-update mechanism can install or update from it directly.
+#
+# WORKFLOW:
+#   1. Author bumps the version field in module.json on main.
+#   2. Author commits and pushes.
+#   3. Author runs `git tag v0.1.3` then `git push --tags`.
+#   4. This workflow runs:
+#      - Verifies the tag matches the version in module.json (catches mismatch).
+#      - Updates module.json's manifest/download URLs to point at this specific
+#        release (immutable URLs, so Forge cache misses fall back gracefully).
+#      - Builds module.zip with module.json at the root (Foundry's expectation).
+#      - Creates the GitHub Release with module.zip and module.json attached.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Foundry uses two URLs from module.json:
+#   - manifest: where to check for updates (always points at /main, so users
+#               always see the latest version from main)
+#   - download: where to fetch the zip when installing/updating (points at
+#               the latest release, which is updated atomically with each tag)
+# We rewrite the download URL on each release to point at the SPECIFIC tag,
+# which makes it immutable - useful if someone pins to an older version.
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"          # v0.1.3
+          VERSION="${TAG#v}"                      # 0.1.3
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify module.json version matches tag
+        run: |
+          MANIFEST_VERSION=$(jq -r '.version' module.json)
+          if [ "$MANIFEST_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::Tag version (${{ steps.tag.outputs.version }}) does not match module.json version ($MANIFEST_VERSION). Bump module.json before tagging."
+            exit 1
+          fi
+          echo "Version match confirmed: $MANIFEST_VERSION"
+
+      - name: Pin the download URL to this release tag
+        # The download URL stays as `/releases/latest/download/module.zip` for
+        # the install flow, but we ALSO build a tag-specific module.json that
+        # gets attached to the release as the canonical manifest for that
+        # version. The /main/module.json that Foundry checks for updates is
+        # the moving target; the release-attached module.json is the snapshot.
+        run: |
+          jq --arg url "https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/module.zip" \
+             '.download = $url' module.json > module.json.tmp
+          mv module.json.tmp module.json
+          echo "module.json updated for release ${{ steps.tag.outputs.tag }}:"
+          jq '.version, .manifest, .download' module.json
+
+      - name: Build module.zip
+        # Foundry expects module.json at the zip root, NOT nested in a wrapper
+        # folder. We zip the contents directly. Exclude developer artifacts.
+        run: |
+          zip -r module.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".gitignore" \
+            -x "preflight.mjs" \
+            -x "test*.mjs" \
+            -x "*.DS_Store"
+          echo "Zip contents:"
+          unzip -l module.zip
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          # If a release was drafted manually, this preserves the draft body.
+          # If not, no body is set; the user can edit it after.
+          generate_release_notes: false
+          files: |
+            module.zip
+            module.json
+          fail_on_unmatched_files: true

@@ -32,6 +32,16 @@
   color: #5a3e22;
 }
 
+.wfrp4e-engaged-in-melee-breakdown .outnumbering-flipped {
+  margin-top: 4px;
+  padding: 3px 6px;
+  background: rgba(192, 80, 30, 0.15);
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #8b3a0e;
+}
+
 /* Token HUD: Disengage button. The HUD uses .control-icon for its buttons,
  * which already provides the basic round shape and hover state. We only
  * override the icon color so it reads as a "leave combat" action. */

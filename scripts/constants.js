@@ -18,6 +18,7 @@ export const FLAGS = {
 export const SETTINGS = {
   AUTO_DISENGAGE_DISTANCE: "autoDisengageDistance",
   ENABLE_AUTO_TRACKING: "enableAutoTracking",
+  SKIRMISH_STALE_SECONDS: "skirmishStaleSeconds",
   DEBUG: "debug",
 };
 

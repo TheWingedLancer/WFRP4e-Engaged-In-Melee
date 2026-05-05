@@ -3,54 +3,49 @@ import { MODULE_ID, FLAGS } from "./constants.js";
 /**
  * EngagementTracker
  *
- * Manages the per-Combat engagement graph. Two tokens are "Engaged" (Core p.159)
- * when they have attacked each other in melee and the relationship has not yet
- * gone stale (no attack between them for a full Round).
+ * Manages the engagement graph for the current scene. Two tokens are
+ * "Engaged" (Core p.159) when they have attacked each other in melee and the
+ * relationship has not yet gone stale (no attack between them for a full
+ * Round, or - when no Combat Tracker is running - for the configured
+ * staleness window in real seconds).
  *
- * Storage model: the engagement graph is persisted as a flag on the active
- * Combat document. This gives us free serialization, cross-client sync, and
- * automatic cleanup at combat end. We never mutate the flag in place — every
- * change is a setFlag() call so other clients see it.
+ * STORAGE MODEL: The engagement graph is persisted as a flag on the active
+ * Scene document. This means:
  *
- * The graph itself is a symmetric map:
- *   { [tokenId]: { engagedWith: string[], lastAttackRound: number } }
+ *   - Engagement state survives page reloads.
+ *   - It syncs to all clients via Foundry's normal document update mechanism.
+ *   - It works whether or not the Combat Tracker is running. WFRP4e tables
+ *     frequently run "skirmishes" without a formal Combat document, and the
+ *     module should support that.
+ *   - State is per-scene, which is what we want: tokens on different scenes
+ *     can't be in the same melee.
  *
- * `lastAttackRound` is the most recent round in which an attack occurred
- * between this token and ANY of its engaged opponents. We track it per-token
- * rather than per-edge to keep the data structure flat; the staleness check
- * (see pruneStale) re-derives per-edge information when needed.
+ * The graph is a symmetric edge map:
+ *   {
+ *     [tokenId]: {
+ *       [otherTokenId]: { round: number, timestamp: number }
+ *     }
+ *   }
  *
- * Actually, we DO need per-edge timing for correctness. If A attacks B in
- * round 1, then A attacks C in round 3, the A-B engagement should have gone
- * stale at the start of round 3 even though A's lastAttackRound is now 3.
- * So we store edges as: { [tokenId]: { [otherId]: lastAttackRound } }
+ * `round` is the Combat round when the engagement was established (or 0 if
+ * outside Combat). `timestamp` is the Date.now() of the establishment, used
+ * for wall-clock staleness when there's no Combat to provide round numbers.
  */
 export class EngagementTracker {
-  constructor(combat) {
-    if (!combat) throw new Error("EngagementTracker requires a Combat document");
-    this.combat = combat;
+  constructor(scene) {
+    if (!scene) throw new Error("EngagementTracker requires a Scene document");
+    this.scene = scene;
   }
 
-  /**
-   * Get the raw engagement graph from combat flags. Returns a fresh object
-   * every call — never mutate in place.
-   */
   _getGraph() {
-    const stored = this.combat.getFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
+    const stored = this.scene.getFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
     return stored ? foundry.utils.deepClone(stored) : {};
   }
 
-  /**
-   * Persist the graph back to combat flags. Awaitable.
-   */
   async _setGraph(graph) {
-    return this.combat.setFlag(MODULE_ID, FLAGS.ENGAGEMENTS, graph);
+    return this.scene.setFlag(MODULE_ID, FLAGS.ENGAGEMENTS, graph);
   }
 
-  /**
-   * Get the set of token IDs currently engaged with `tokenId`.
-   * Returns an empty array if the token has no engagements.
-   */
   getEngagementsFor(tokenId) {
     const graph = this._getGraph();
     const node = graph[tokenId];
@@ -58,36 +53,32 @@ export class EngagementTracker {
     return Object.keys(node);
   }
 
-  /**
-   * Are these two tokens engaged?
-   */
   areEngaged(tokenIdA, tokenIdB) {
     const graph = this._getGraph();
     return Boolean(graph[tokenIdA]?.[tokenIdB]);
   }
 
   /**
-   * Mark two tokens as engaged. Called when an attack is resolved between them.
-   * Symmetric: both directions of the edge are stamped with the current round.
+   * Mark two tokens as engaged. Symmetric.
    */
-  async engage(tokenIdA, tokenIdB, round) {
+  async engage(tokenIdA, tokenIdB, round = 0) {
     if (tokenIdA === tokenIdB) return;
     const graph = this._getGraph();
+    const stamp = { round, timestamp: Date.now() };
     if (!graph[tokenIdA]) graph[tokenIdA] = {};
     if (!graph[tokenIdB]) graph[tokenIdB] = {};
-    graph[tokenIdA][tokenIdB] = round;
-    graph[tokenIdB][tokenIdA] = round;
+    graph[tokenIdA][tokenIdB] = stamp;
+    graph[tokenIdB][tokenIdA] = stamp;
     await this._setGraph(graph);
   }
 
   /**
-   * Remove an engagement edge. Used by the Disengage button and auto-disengage.
-   * If `tokenIdB` is omitted, remove ALL edges touching tokenIdA.
+   * Remove an engagement. If `tokenIdB` is omitted, drop all edges touching
+   * tokenIdA.
    */
   async disengage(tokenIdA, tokenIdB = null) {
     const graph = this._getGraph();
     if (tokenIdB === null) {
-      // Drop all edges touching A
       for (const otherId of Object.keys(graph[tokenIdA] ?? {})) {
         if (graph[otherId]) delete graph[otherId][tokenIdA];
         if (graph[otherId] && Object.keys(graph[otherId]).length === 0) {
@@ -109,29 +100,23 @@ export class EngagementTracker {
   }
 
   /**
-   * Prune engagements that have gone stale. Per Core p.159: "If you don't
-   * attack each other for a full Round, you are no longer Engaged."
-   *
-   * Interpretation: if the engagement was last refreshed in round N, then
-   * round N+1 passes without a refresh, the engagement breaks at the end of
-   * round N+1 / start of round N+2. So at the start of round R, drop any edge
-   * with lastAttackRound <= R - 2.
-   *
-   * Called from the combatRound hook (start of new round).
+   * Round-based pruning. Per Core p.159: if a full Round passes without an
+   * attack between two combatants, they're no longer Engaged.
+   * Only affects engagements established with round > 0 (in combat).
    */
   async pruneStale(currentRound) {
     const graph = this._getGraph();
     let mutated = false;
-    const cutoff = currentRound - 2; // edges with lastAttack <= cutoff are dead
+    const cutoff = currentRound - 2;
 
     for (const [tokenId, edges] of Object.entries(graph)) {
-      for (const [otherId, lastRound] of Object.entries(edges)) {
-        if (lastRound <= cutoff) {
+      for (const [otherId, stamp] of Object.entries(edges)) {
+        if (stamp.round > 0 && stamp.round <= cutoff) {
           delete graph[tokenId][otherId];
           mutated = true;
         }
       }
-      if (Object.keys(graph[tokenId]).length === 0) {
+      if (Object.keys(graph[tokenId] ?? {}).length === 0) {
         delete graph[tokenId];
         mutated = true;
       }
@@ -142,19 +127,42 @@ export class EngagementTracker {
   }
 
   /**
-   * Clear all engagement state. Called on combat end.
+   * Wall-clock staleness pruning. Used for skirmish (out-of-combat)
+   * engagements only. Triggered opportunistically before outnumbering
+   * calculations rather than on a timer.
    */
+  async pruneStaleByTime(maxAgeSeconds) {
+    const graph = this._getGraph();
+    let mutated = false;
+    const cutoff = Date.now() - (maxAgeSeconds * 1000);
+
+    for (const [tokenId, edges] of Object.entries(graph)) {
+      for (const [otherId, stamp] of Object.entries(edges)) {
+        if (stamp.round === 0 && stamp.timestamp < cutoff) {
+          delete graph[tokenId][otherId];
+          mutated = true;
+        }
+      }
+      if (Object.keys(graph[tokenId] ?? {}).length === 0) {
+        delete graph[tokenId];
+        mutated = true;
+      }
+    }
+
+    if (mutated) await this._setGraph(graph);
+    return mutated;
+  }
+
   async clear() {
-    return this.combat.unsetFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
+    return this.scene.unsetFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
   }
 
   /**
-   * Get the active EngagementTracker for the current scene's active combat,
-   * or null if no combat is active. Convenience helper.
+   * Get the active tracker for the currently viewed scene.
    */
   static current() {
-    const combat = game.combat;
-    if (!combat?.started) return null;
-    return new EngagementTracker(combat);
+    const scene = canvas?.scene ?? game.scenes?.viewed ?? game.scenes?.active;
+    if (!scene) return null;
+    return new EngagementTracker(scene);
   }
 }

@@ -17,10 +17,29 @@ WFRP4e's Outnumbering rule (Core p.161) gives a +20 to-hit at 2-to-1 and +40 at 
 
 ### What you'll see at the table
 
-- Attack a goblin while another PC is also engaged with it → your melee test silently gains +20.
-- A chat-card panel below the test shows the breakdown: who's on each side and what the ratio was.
+- Attack a goblin while another PC is also engaged with it → your melee test silently gains +2 SL (equivalent to +20 to-hit).
+- A chat-card panel below the test shows the breakdown: who's on each side, the ratio, and the SL adjustment.
 - Move a polearm-wielder away from their target → engagement holds out to their reach. Move further → engagement breaks automatically.
 - A "Disengage" button (red running figure) appears on the Token HUD whenever a token has active engagements.
+
+### How the bonus is applied (technical detail)
+
+When the player opens an attack dialog targeting an engaged enemy, the module hooks the dialog's render cycle and adds the appropriate +20 or +40 to the dialog's `modifier` field — exactly as if the player had typed it in themselves, or as the system itself does for Charging and weapon Quality bonuses. The user sees the modifier in the dialog before they roll. When they submit, WFRP4e rolls against the modified target, and the system's own logic handles Critical/Fumble correctly.
+
+This means: **a roll of 66 against a Skill 54 attacker outnumbering 2:1 is correctly resolved as a Critical Hit** (66 ≤ 74 modified target, 6/6 doubles), not a Fumble.
+
+### Important: Disposition matters
+
+Allies are determined by **token disposition** (FRIENDLY / NEUTRAL / HOSTILE). Two tokens count as allies only if their disposition matches.
+
+**Warning:** Mounts, animal companions, and many NPC followers default to **NEUTRAL** disposition in WFRP4e. This means a warhorse engaged with the same orc as your FRIENDLY PCs **will not contribute to the outnumbering count**. If you want a mount or companion to count as an ally, change its token disposition to FRIENDLY (Token Configuration → Disposition).
+
+### Combat Tracker is optional
+
+The module works whether or not a Combat Tracker is running:
+
+- **In a formal Combat:** engagements are pruned at the start of each new round per Core p.159.
+- **In a skirmish (no Combat):** engagements are pruned by wall-clock time after the configurable TTL (default 60 seconds).
 
 ## Installation
 
@@ -35,8 +54,9 @@ Then enable it in your world's module list.
 ## Settings
 
 - **Auto-disengage on movement** (default on) — drop engagements when a token moves out of reach.
-- **Minimum auto-disengage distance** (default 2 yards) — floor for the auto-disengage threshold; the actual threshold is `max(this, max-of-both-weapons-reach)`.
-- **Debug logging** (default off) — log engagement state changes to the console.
+- **Minimum auto-disengage distance** (default 2 yards) — floor for the auto-disengage threshold.
+- **Skirmish engagement TTL** (default 60 seconds) — how long out-of-combat engagements persist without further attacks. Set to 0 to disable wall-clock pruning.
+- **Debug logging** (default off) — log engagement state changes and bonus calculations to the console.
 
 ## API
 

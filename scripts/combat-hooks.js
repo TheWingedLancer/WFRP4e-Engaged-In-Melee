@@ -4,26 +4,34 @@ import { EngagementTracker } from "./engagement-tracker.js";
 /**
  * Combat lifecycle hooks for engagement state management.
  *
- * The "if you don't attack each other for a full Round, you are no longer
- * Engaged" rule (Core p.159) is implemented at the start of each new round
- * via the combatRound hook. See EngagementTracker.pruneStale for the timing
- * logic.
+ * Engagement state lives on the scene (not the Combat document) so it works
+ * for both formal Combat-Tracker fights and informal skirmishes. The
+ * combatRound hook just provides a convenient signal for round-based
+ * pruning per Core p.159; out-of-combat skirmish engagements are pruned by
+ * wall-clock time instead (see roll-hooks.js).
  */
 
 /**
- * Hook: combatRound
- *
- * Fired when the round counter advances. We prune engagements that have gone
- * stale. Foundry fires combatRound on all clients but only the GM should
- * mutate the combat document — so we gate on isFirstGM() to avoid races.
+ * Helper: only the active GM should mutate state, to avoid races.
+ */
+function shouldHandleStateChange() {
+  if (!game.user.isGM) return false;
+  if (!game.users.activeGM) return true; // No active GM check available; proceed
+  return game.users.activeGM.id === game.user.id;
+}
+
+/**
+ * Hook: combatRound - prune engagements that went a full round without an
+ * attack, per Core p.159.
  */
 export async function onCombatRound(combat, updateData, updateOptions) {
   try {
-    if (!game.user.isGM) return;
-    if (!game.users.activeGM || game.users.activeGM.id !== game.user.id) return;
+    if (!shouldHandleStateChange()) return;
     if (!combat?.started) return;
 
-    const tracker = new EngagementTracker(combat);
+    const tracker = EngagementTracker.current();
+    if (!tracker) return;
+
     const newRound = updateData.round ?? combat.round;
     const pruned = await tracker.pruneStale(newRound);
     if (pruned) {
@@ -35,25 +43,31 @@ export async function onCombatRound(combat, updateData, updateOptions) {
 }
 
 /**
- * Hook: deleteCombat
+ * Hook: deleteCombat - clear in-combat engagements when combat ends. Skirmish
+ * (round=0) engagements are preserved since they're managed by wall-clock TTL.
  *
- * Combat ended (or was deleted). The flag dies with the combat document, so
- * there's actually nothing to clean up — but we log for clarity.
+ * Actually: when combat ends, the simplest expectation is that all engagements
+ * clear. A round=0 engagement only existed because there was no combat at the
+ * time; if combat just ended, those weren't in play. So clear everything.
  */
-export function onDeleteCombat(combat) {
-  console.log(`${MODULE_ID} | Combat ended; engagement state cleared with combat document.`);
+export async function onDeleteCombat(combat) {
+  try {
+    if (!shouldHandleStateChange()) return;
+    const tracker = EngagementTracker.current();
+    if (!tracker) return;
+    await tracker.clear();
+    console.log(`${MODULE_ID} | Combat ended; engagement state cleared.`);
+  } catch (err) {
+    console.error(`${MODULE_ID} | deleteCombat hook error:`, err);
+  }
 }
 
 /**
- * Hook: deleteToken
- *
- * If a token is removed from the scene mid-combat, drop all its engagements.
- * This catches the "killed monster" case as well as scene changes.
+ * Hook: deleteToken - drop all engagements involving a deleted token.
  */
 export async function onDeleteToken(tokenDoc) {
   try {
-    if (!game.user.isGM) return;
-    if (!game.users.activeGM || game.users.activeGM.id !== game.user.id) return;
+    if (!shouldHandleStateChange()) return;
 
     const tracker = EngagementTracker.current();
     if (!tracker) return;

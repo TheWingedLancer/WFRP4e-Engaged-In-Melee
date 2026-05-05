@@ -2,28 +2,29 @@ import { MODULE_ID } from "./constants.js";
 import { registerSettings } from "./settings.js";
 import { EngagementTracker } from "./engagement-tracker.js";
 import { calculateOutnumbering } from "./outnumbering.js";
-import { onPreRollTest, onRollTest, onRenderChatMessage } from "./roll-hooks.js";
+import {
+  onRenderWeaponDialog,
+  onRollWeaponTest,
+  onCreateChatMessage,
+  onRenderChatMessage,
+} from "./roll-hooks.js";
 import { onCombatRound, onDeleteCombat, onDeleteToken } from "./combat-hooks.js";
 import { onUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
 import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
 
 /**
- * ESM import preflight: every named import above is verified to resolve to a
- * function or class. If any resolve to undefined we know there's a docblock
- * truncation or circular import in the bundle. This pattern was lifted from
- * wfrp4e-combat-simulator where the same class of bug bit us on Forge.
- *
- * The preflight runs at module load time (before any hook fires) so failures
- * surface in the console immediately on Foundry startup rather than on first
- * combat.
+ * ESM import preflight - verifies every named import resolves at module load
+ * time so docblock truncation or circular import bugs surface immediately
+ * rather than at first attack.
  */
 function preflightImports() {
   const imports = {
     EngagementTracker,
     calculateOutnumbering,
-    onPreRollTest,
-    onRollTest,
+    onRenderWeaponDialog,
+    onRollWeaponTest,
+    onCreateChatMessage,
     onRenderChatMessage,
     onCombatRound,
     onDeleteCombat,
@@ -36,12 +37,10 @@ function preflightImports() {
   };
   const broken = [];
   for (const [name, ref] of Object.entries(imports)) {
-    if (ref === undefined || ref === null) {
-      broken.push(name);
-    }
+    if (ref === undefined || ref === null) broken.push(name);
   }
   if (broken.length > 0) {
-    const msg = `${MODULE_ID} | ESM IMPORT FAILURE: ${broken.join(", ")} resolved to undefined. Check for docblock truncation or circular imports.`;
+    const msg = `${MODULE_ID} | ESM IMPORT FAILURE: ${broken.join(", ")} resolved to undefined.`;
     console.error(msg);
     ui.notifications?.error(msg, { permanent: true });
     return false;
@@ -58,7 +57,6 @@ Hooks.once("init", () => {
 Hooks.once("ready", () => {
   console.log(`${MODULE_ID} | Ready`);
 
-  // Expose the tracker on the module API for macros and debugging.
   const moduleData = game.modules.get(MODULE_ID);
   if (moduleData) {
     moduleData.api = {
@@ -71,23 +69,25 @@ Hooks.once("ready", () => {
   }
 });
 
-// WFRP4e roll hooks
-Hooks.on("wfrp4e:preRollTest", onPreRollTest);
-Hooks.on("wfrp4e:rollTest", onRollTest);
+// PRE-ROLL: Inject outnumbering bonus into the WeaponDialog before the user
+// submits. This is the only mechanism that allows the bonus to affect
+// Critical/Fumble determination correctly per RAW (Core p.159-161).
+Hooks.on("renderWeaponDialog", onRenderWeaponDialog);
 
-// Chat card decoration. V13 uses renderChatMessageHTML; older systems use
-// renderChatMessage. We register both — only one will fire in any given
-// version, the other is a no-op.
+// POST-ROLL: Record the engagement edge.
+Hooks.on("wfrp4e:rollWeaponTest", onRollWeaponTest);
+
+// Chat message lifecycle: attach breakdown flag, then render the panel.
+Hooks.on("createChatMessage", onCreateChatMessage);
 Hooks.on("renderChatMessageHTML", onRenderChatMessage);
-Hooks.on("renderChatMessage", onRenderChatMessage);
 
-// Combat lifecycle
+// Combat lifecycle.
 Hooks.on("combatRound", onCombatRound);
 Hooks.on("deleteCombat", onDeleteCombat);
 Hooks.on("deleteToken", onDeleteToken);
 
-// Movement-based auto-disengage
+// Movement-based auto-disengage.
 Hooks.on("updateToken", onUpdateToken);
 
-// Manual disengage button
+// Manual disengage button.
 Hooks.on("renderTokenHUD", onRenderTokenHUD);

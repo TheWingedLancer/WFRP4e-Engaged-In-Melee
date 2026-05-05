@@ -23,6 +23,16 @@ export function registerSettings() {
     range: { min: 1, max: 10, step: 1 },
   });
 
+  game.settings.register(MODULE_ID, SETTINGS.SKIRMISH_STALE_SECONDS, {
+    name: `${MODULE_ID}.settings.skirmishStaleSeconds.name`,
+    hint: `${MODULE_ID}.settings.skirmishStaleSeconds.hint`,
+    scope: "world",
+    config: true,
+    type: Number,
+    default: 60,
+    range: { min: 0, max: 600, step: 30 },
+  });
+
   game.settings.register(MODULE_ID, SETTINGS.DEBUG, {
     name: `${MODULE_ID}.settings.debug.name`,
     hint: `${MODULE_ID}.settings.debug.hint`,

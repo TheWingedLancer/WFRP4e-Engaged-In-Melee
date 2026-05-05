@@ -9,6 +9,10 @@
         "name": "Minimum auto-disengage distance (yards)",
         "hint": "Floor for the auto-disengage threshold. The actual threshold is the maximum of this value and the longer of the two combatants' equipped weapon reaches (Very Long = 4 yds, Massive = 6 yds, all others = 2 yds per Core p.297). Default 2 yards."
       },
+      "skirmishStaleSeconds": {
+        "name": "Skirmish engagement TTL (seconds)",
+        "hint": "When attacks happen outside an active Combat Tracker session, engagements expire after this many real-time seconds without further attacks. Set to 0 to disable wall-clock pruning. Default 60. (In-combat engagements are pruned by round per Core p.159 regardless.)"
+      },
       "debug": {
         "name": "Debug logging",
         "hint": "Log engagement state changes and outnumbering calculations to the console."
@@ -16,7 +20,9 @@
     },
     "chat": {
       "header": "Outnumbering: +{bonus} to hit",
-      "detail": "{attacker}'s side ({attackerCount}) vs {defender}'s side ({defenderCount}) — ratio {ratio}"
+      "detail": "{attacker}'s side ({attackerCount}) vs {defender}'s side ({defenderCount}) — ratio {ratio}",
+      "slChange": "Adjusted SL: {oldSL} → {newSL}",
+      "flipped": "Outcome flipped by Outnumbering bonus."
     },
     "hud": {
       "disengageTooltip": "Disengage from all opponents",

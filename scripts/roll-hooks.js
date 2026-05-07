@@ -275,28 +275,45 @@ export function onRenderWeaponDialog(dialog, html, data) {
         }
         if (!html) return;
 
-        // Find the modifier tooltip div in the DOM and update it.
+        // Find the modifier tooltip div in the DOM. The system only renders
+        // a [data-tooltip] element for a field when something contributed to
+        // it during the render cycle. For attacks like Boots's Hooves trait
+        // where ours is the only contribution, no tooltip element exists and
+        // we must create one.
         const modInput = rootEl.querySelector('input[name="modifier"]');
         if (!modInput) return;
+
+        // The system places its tooltip div as a sibling within the same
+        // `.form-group` row as the input. We look for one first.
         let tipEl = null;
-        let walker = modInput.parentElement;
-        for (let depth = 0; depth < 4 && walker && !tipEl; depth++) {
-          tipEl = walker.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button)');
-          if (!tipEl) walker = walker.parentElement;
+        const formGroup = modInput.closest('.form-group');
+        if (formGroup) {
+          tipEl = formGroup.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button):not(li)');
         }
+        // Fallback: walk up the ancestor chain.
         if (!tipEl) {
-          // Fallback: find the tooltip element by content match.
-          const candidates = rootEl.querySelectorAll('[data-tooltip]');
-          for (const el of candidates) {
-            const tip = el.getAttribute('data-tooltip') ?? '';
-            if (tip.includes('Bonus for') || tip.includes('mount')) {
-              tipEl = el;
-              break;
-            }
+          let walker = modInput.parentElement;
+          for (let depth = 0; depth < 4 && walker && !tipEl; depth++) {
+            tipEl = walker.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button):not(li)');
+            if (!tipEl) walker = walker.parentElement;
           }
         }
-        if (!tipEl) return;
-        tipEl.setAttribute("data-tooltip", html);
+
+        if (tipEl) {
+          // Update existing tooltip element.
+          tipEl.setAttribute("data-tooltip", html);
+        } else {
+          // No existing tooltip element — attach to the modifier input
+          // itself. Hovering the input surfaces the tooltip. This is the
+          // case for trait attacks where ours is the only contribution.
+          modInput.setAttribute("data-tooltip", html);
+          // Also attach to the form-fields container so hovering the area
+          // around the input (not just precisely on it) shows the tooltip.
+          const formFields = modInput.closest('.form-fields');
+          if (formFields) {
+            formFields.setAttribute("data-tooltip", html);
+          }
+        }
       } catch (e) {
         console.warn(`${MODULE_ID} | tooltip DOM patch failed:`, e);
       }

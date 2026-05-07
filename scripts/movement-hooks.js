@@ -64,9 +64,16 @@ function getProjectedToken(tokenDoc, changes) {
 }
 
 /**
- * Hook: updateToken (pre-update, but we register on the post-update hook for
- * cleaner state). Foundry's updateToken fires after the document has been
- * persisted, so canvas.tokens.get(id).center already reflects the new spot.
+ * Hook: updateToken — auto-disengage on movement.
+ *
+ * In V13, this hook fires AFTER the document has been updated, but the
+ * Token placeable's visual `.center` may not have refreshed yet when the
+ * hook fires synchronously. So we compute distance from the DOCUMENT's
+ * new x/y (via getProjectedToken), not from `placeable.center`.
+ *
+ * V13 also fires updateToken for non-position events (movement history
+ * clears, animation state, etc.) — we filter those out by requiring an
+ * actual x or y change in `changes`.
  */
 export async function onUpdateToken(tokenDoc, changes) {
   try {
@@ -81,12 +88,18 @@ export async function onUpdateToken(tokenDoc, changes) {
     const engaged = tracker.getEngagementsFor(tokenDoc.id);
     if (engaged.length === 0) return;
 
+    // Use the document's NEW position to compute the projected center,
+    // because the placeable's visual `.center` may be stale at this point.
     const movedToken = canvas.tokens?.get(tokenDoc.id);
     if (!movedToken) return;
+    const projected = getProjectedToken(tokenDoc, changes);
+    if (!projected) return;
 
-    // Floor threshold from settings — never drop below this even if both
-    // tokens are unarmed. Default 2 yards.
     const floorThreshold = game.settings.get(MODULE_ID, SETTINGS.AUTO_DISENGAGE_DISTANCE);
+
+    if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+      console.log(`${MODULE_ID} | updateToken: ${movedToken.name} moved to projected center (${projected.center.x}, ${projected.center.y}); checking ${engaged.length} engagement(s)`);
+    }
 
     for (const otherId of engaged) {
       const otherToken = canvas.tokens?.get(otherId);
@@ -98,7 +111,12 @@ export async function onUpdateToken(tokenDoc, changes) {
       // Use the longer of the two combatants' weapon reaches, or the floor.
       const reachThreshold = getEngagementThreshold(movedToken, otherToken);
       const threshold = Math.max(reachThreshold, floorThreshold);
-      const dist = distanceBetween(movedToken, otherToken);
+      // Distance computed from PROJECTED position (post-update doc state) to
+      // the other token's current center.
+      const dist = canvas.grid.measurePath([projected.center, otherToken.center])?.distance ?? Infinity;
+      if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+        console.log(`${MODULE_ID} |   vs ${otherToken.name}: distance ${dist.toFixed(1)}yd, threshold ${threshold}yd, would disengage: ${dist > threshold}`);
+      }
       if (dist > threshold) {
         await tracker.disengage(tokenDoc.id, otherId);
         if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {

@@ -213,32 +213,101 @@ export function onRenderWeaponDialog(dialog, html, data) {
     // engagement state changed between renders.
     const previouslyApplied = dialog[APPLIED_MARKER] ?? 0;
 
-    // Always (re-)add the tooltip entry on every render. The system's
-    // `start()` likely clears tooltips at the start of each render cycle, so
-    // we need to re-add ours. Tooltip is independent of bonus-value changes.
-    function addOutnumberingTooltip(bonusValue, deltaValue) {
+    // Build the tooltip text per the user's preferred phrasing. We keep this
+    // text-only (no value parameter to add()) because the system's tooltip
+    // formatter would append the value as " (+40)" at the END of the line,
+    // and we want the value embedded in the middle: "outnumbering 3:1 (+40):".
+    function buildTooltipReason(bonusValue) {
+      const sideA = result.attackerSideTokens?.map(t => t?.name ?? "?").join(", ") ?? attacker.name;
+      const sideD = result.defenderSideTokens?.map(t => t?.name ?? "?").join(", ") ?? target.name;
+      const sideACount = result.attackerSideCount ?? 1;
+      const sideDCount = result.defenderSideCount ?? 1;
+      const sideAWithYou = sideA.replace(attacker.name, "You");
+      const ratioText = result.ratio ?? `${sideACount}:${Math.max(1, sideDCount)}`;
+      const sign = bonusValue >= 0 ? "+" : "";
+      return `Bonus for outnumbering opponent ${ratioText} (${sign}${bonusValue}): ${sideAWithYou} (${sideACount}) vs Enemy: ${sideD} (${sideDCount}).`;
+    }
+
+    // Patch the rendered modifier tooltip in the DOM.
+    //
+    // The system's tooltip pipeline (start → effects-add → finish → render)
+    // completes BEFORE our renderWeaponDialog hook fires, so calling
+    // dialog.tooltips.add() at this point correctly updates the in-memory
+    // list but the rendered HTML in the DOM is already stale.
+    //
+    // Strategy: call dialog.tooltips.add() (correctly updates the list with
+    // both mount-bonus and ours), then call dialog.tooltips._formatTooltip()
+    // which regenerates the full HTML from the list, and write that HTML
+    // back to the DOM tooltip element.
+    function applyOutnumberingTooltip(rootEl, bonusValue) {
       try {
-        if (!dialog.tooltips?.add || bonusValue === 0) return;
-        const sideA = result.attackerSideTokens?.map(t => t?.name ?? "?").join(", ") ?? attacker.name;
-        const sideD = result.defenderSideTokens?.map(t => t?.name ?? "?").join(", ") ?? target.name;
-        const sideACount = result.attackerSideCount ?? 1;
-        const sideDCount = result.defenderSideCount ?? 1;
-        const sideAWithYou = sideA.replace(attacker.name, "You");
-        const ratioText = result.ratio ?? `${sideACount}:${Math.max(1, sideDCount)}`;
-        const sign = bonusValue >= 0 ? "+" : "";
-        const reason = `Bonus for outnumbering opponent ${ratioText} (${sign}${bonusValue}): ${sideAWithYou} (${sideACount}) vs Enemy: ${sideD} (${sideDCount}).`;
-        dialog.tooltips.add("modifier", deltaValue, reason);
-      } catch (tooltipErr) {
-        console.warn(`${MODULE_ID} | tooltip add failed:`, tooltipErr);
+        if (!rootEl || bonusValue === 0 || !dialog.tooltips) return;
+
+        const reasonText = buildTooltipReason(bonusValue);
+
+        // Update the in-memory list. First, remove any prior outnumbering
+        // entry we added (so re-renders don't accumulate duplicates).
+        const list = dialog.tooltips._modifier?.list;
+        if (Array.isArray(list)) {
+          for (let i = list.length - 1; i >= 0; i--) {
+            const src = list[i]?.source ?? "";
+            if (typeof src === "string" && src.startsWith("Bonus for outnumbering")) {
+              list.splice(i, 1);
+            }
+          }
+        }
+        // Add our entry with value=undefined so the formatter does NOT
+        // append "(+40)" automatically — our reason text already includes
+        // "(+40):" in the middle. The add() method requires truthy value
+        // and source, so we bypass it and push directly.
+        if (Array.isArray(list)) {
+          list.push({ value: undefined, source: reasonText });
+        }
+
+        // Regenerate the full tooltip HTML from the list.
+        let html;
+        try {
+          html = dialog.tooltips._formatTooltip("modifier", true);
+        } catch (e) {
+          // If the formatter signature differs, fall back to building it
+          // ourselves in the same format.
+          html = `<p>&#8226; ${reasonText}</p>`;
+        }
+        if (!html) return;
+
+        // Find the modifier tooltip div in the DOM and update it.
+        const modInput = rootEl.querySelector('input[name="modifier"]');
+        if (!modInput) return;
+        let tipEl = null;
+        let walker = modInput.parentElement;
+        for (let depth = 0; depth < 4 && walker && !tipEl; depth++) {
+          tipEl = walker.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button)');
+          if (!tipEl) walker = walker.parentElement;
+        }
+        if (!tipEl) {
+          // Fallback: find the tooltip element by content match.
+          const candidates = rootEl.querySelectorAll('[data-tooltip]');
+          for (const el of candidates) {
+            const tip = el.getAttribute('data-tooltip') ?? '';
+            if (tip.includes('Bonus for') || tip.includes('mount')) {
+              tipEl = el;
+              break;
+            }
+          }
+        }
+        if (!tipEl) return;
+        tipEl.setAttribute("data-tooltip", html);
+      } catch (e) {
+        console.warn(`${MODULE_ID} | tooltip DOM patch failed:`, e);
       }
     }
 
+    const root = html instanceof HTMLElement ? html : html?.[0];
+
     if (result.bonus === previouslyApplied) {
-      // No bonus-value change, but re-add the tooltip in case the system
-      // cleared it at the start of this render cycle. We pass result.bonus
-      // (not 0) because the tooltip system likely re-baselines on each
-      // render — start fresh, accumulate contributions, render.
-      addOutnumberingTooltip(result.bonus, result.bonus);
+      // No bonus-value change, but the DOM may have been re-rendered.
+      // Re-apply our tooltip line.
+      applyOutnumberingTooltip(root, result.bonus);
       if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
         console.log(`${MODULE_ID} | renderWeaponDialog: bonus unchanged (${result.bonus}); tooltip refreshed`);
       }
@@ -258,12 +327,10 @@ export function onRenderWeaponDialog(dialog, html, data) {
     }
     dialog[APPLIED_MARKER] = result.bonus;
 
-    // Add the tooltip entry showing the reason for the bonus.
-    addOutnumberingTooltip(result.bonus, delta);
+    // Patch the tooltip DOM with the regenerated tooltip HTML.
+    applyOutnumberingTooltip(root, result.bonus);
 
-    // Update the rendered input element so the user sees the new value.
-    // V13 ApplicationV2 passes the rendered HTMLElement as the second hook arg.
-    const root = html instanceof HTMLElement ? html : html?.[0];
+    // Update the rendered input element so the user sees the new modifier value.
     if (root) {
       const input = root.querySelector('input[name="modifier"], input[data-name="modifier"]');
       if (input) {

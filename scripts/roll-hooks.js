@@ -52,13 +52,13 @@ function getAttackerTokenFromDialog(dialog) {
   // Try the dialog's token first
   const tokenDoc = dialog.token ?? dialog.data?.token;
   if (tokenDoc) {
-    return tokenDoc.object ?? canvas.tokens?.get(tokenDoc.id) ?? null;
+    const t = resolveTokenFromMaybeActor(tokenDoc);
+    if (t) return t;
   }
   // Fall back to actor's active token
   const actor = dialog.actor ?? dialog.data?.actor;
   if (!actor) return null;
-  const tokens = actor.getActiveTokens();
-  return tokens[0] ?? null;
+  return resolveTokenFromMaybeActor(actor);
 }
 
 /**
@@ -91,7 +91,13 @@ function getMeleeTargetFromDialog(dialog) {
     if (!group || !meleeGroups.has(String(group).toLowerCase())) return null;
   }
 
-  // Resolve the target. WeaponDialog.targets is an Array (per the live dump).
+  // Resolve the target. WFRP4e is inconsistent about whether `targets`
+  // contains Token placeables, TokenDocuments, or Actor instances depending
+  // on hook timing. Empirically:
+  //   - WeaponDialog.targets   -> Array<Token>  (placeable)
+  //   - test.targets (post-roll) -> Array<ActorWFRP4e>
+  //   - userTargets fallback    -> Set<Token>
+  // We accept all three.
   const targets = dialog.targets;
   let targetDoc = null;
   if (Array.isArray(targets) && targets.length > 0) {
@@ -108,7 +114,48 @@ function getMeleeTargetFromDialog(dialog) {
   }
   if (!targetDoc) return null;
 
-  return targetDoc.object ?? canvas.tokens?.get(targetDoc.id) ?? null;
+  return resolveTokenFromMaybeActor(targetDoc);
+}
+
+/**
+ * Take a thing that might be a Token placeable, a TokenDocument, or an
+ * Actor, and return the corresponding Token placeable on the current canvas.
+ * Returns null if no token can be found.
+ *
+ * This exists because WFRP4e's hooks pass different shapes depending on
+ * timing:
+ *   - Dialog hooks pass Token placeables in `dialog.targets`
+ *   - Post-roll hooks pass Actor instances in `test.targets`
+ *   - Foundry's user.targets is a Set of Token placeables
+ *
+ * For Actor inputs we use getActiveTokens()[0] to find the token on the
+ * current scene. If multiple tokens exist for the same actor, we pick the
+ * first one — at the table, this corresponds to "the token the player just
+ * targeted," which in single-token-per-actor setups (the common case) is
+ * always correct.
+ */
+function resolveTokenFromMaybeActor(thing) {
+  if (!thing) return null;
+
+  // Token placeable: has both id and a center, and is what we want directly
+  if (thing.center && thing.document) return thing;
+
+  // TokenDocument: has .object pointing at the placeable
+  if (thing.object) return thing.object;
+
+  // Actor: has getActiveTokens()
+  if (typeof thing.getActiveTokens === "function") {
+    const tokens = thing.getActiveTokens();
+    if (tokens.length > 0) return tokens[0];
+  }
+
+  // Last resort: maybe `thing.id` is actually a token id
+  if (thing.id) {
+    const t = canvas.tokens?.get(thing.id);
+    if (t) return t;
+  }
+
+  return null;
 }
 
 /**
@@ -227,12 +274,9 @@ export async function onRollWeaponTest(test) {
     const tracker = EngagementTracker.current();
     if (!tracker) return;
 
-    // Identify attacker and target from the test object. WFRP4e 9.x exposes
-    // these as getters on the test instance.
-    const tokenDoc = test.token ?? test.data?.token;
-    const attacker = tokenDoc
-      ? (tokenDoc.object ?? canvas.tokens?.get(tokenDoc.id))
-      : (test.actor?.getActiveTokens?.()[0] ?? null);
+    // Identify attacker and target from the test object.
+    let attacker = test.token ? resolveTokenFromMaybeActor(test.token) : null;
+    if (!attacker && test.actor) attacker = resolveTokenFromMaybeActor(test.actor);
 
     const item = test.item ?? test.weapon;
     if (!item || item.type !== "weapon") return;
@@ -247,9 +291,7 @@ export async function onRollWeaponTest(test) {
     const targets = test.targets;
     if (Array.isArray(targets) && targets.length > 0) targetDoc = targets[0];
     else if (targets instanceof Set && targets.size > 0) targetDoc = targets.values().next().value;
-    const target = targetDoc
-      ? (targetDoc.object ?? canvas.tokens?.get(targetDoc.id))
-      : null;
+    const target = resolveTokenFromMaybeActor(targetDoc);
 
     if (!attacker || !target) {
       if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {

@@ -209,6 +209,9 @@ export function calculateOutnumbering(attackerToken, defenderToken, tracker) {
   }
 
   // Side D: defender + their allies engaged with the attacker.
+  // This treats physically-intertwined melees as one fight: if the attacker
+  // is engaged with multiple enemies, all of those enemies (and any of the
+  // defender's allies among them) count on the defender's side.
   const attackerEngagements = tracker.getEngagementsFor(attackerToken.id);
   const defenderSide = [defenderToken];
   for (const otherId of attackerEngagements) {
@@ -216,10 +219,6 @@ export function calculateOutnumbering(attackerToken, defenderToken, tracker) {
     const other = resolveToken(otherId);
     if (!other) continue;
     if (!areAllied(defenderToken, other)) continue;
-    // The defender's side is allowed to include unconscious/fleeing tokens for
-    // the purposes of REDUCING the attacker's outnumbering ratio? No — RAW
-    // says outnumbering is about engaged characters, and an unconscious ally
-    // doesn't help defend either. Filter consistently.
     if (!isInFightingCondition(other)) continue;
     defenderSide.push(other);
   }

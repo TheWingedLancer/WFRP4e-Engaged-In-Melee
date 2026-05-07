@@ -213,9 +213,34 @@ export function onRenderWeaponDialog(dialog, html, data) {
     // engagement state changed between renders.
     const previouslyApplied = dialog[APPLIED_MARKER] ?? 0;
 
+    // Always (re-)add the tooltip entry on every render. The system's
+    // `start()` likely clears tooltips at the start of each render cycle, so
+    // we need to re-add ours. Tooltip is independent of bonus-value changes.
+    function addOutnumberingTooltip(bonusValue, deltaValue) {
+      try {
+        if (!dialog.tooltips?.add || bonusValue === 0) return;
+        const sideA = result.attackerSideTokens?.map(t => t?.name ?? "?").join(", ") ?? attacker.name;
+        const sideD = result.defenderSideTokens?.map(t => t?.name ?? "?").join(", ") ?? target.name;
+        const sideACount = result.attackerSideCount ?? 1;
+        const sideDCount = result.defenderSideCount ?? 1;
+        const sideAWithYou = sideA.replace(attacker.name, "You");
+        const ratioText = result.ratio ?? `${sideACount}:${Math.max(1, sideDCount)}`;
+        const sign = bonusValue >= 0 ? "+" : "";
+        const reason = `Bonus for outnumbering opponent ${ratioText} (${sign}${bonusValue}): ${sideAWithYou} (${sideACount}) vs Enemy: ${sideD} (${sideDCount}).`;
+        dialog.tooltips.add("modifier", deltaValue, reason);
+      } catch (tooltipErr) {
+        console.warn(`${MODULE_ID} | tooltip add failed:`, tooltipErr);
+      }
+    }
+
     if (result.bonus === previouslyApplied) {
+      // No bonus-value change, but re-add the tooltip in case the system
+      // cleared it at the start of this render cycle. We pass result.bonus
+      // (not 0) because the tooltip system likely re-baselines on each
+      // render — start fresh, accumulate contributions, render.
+      addOutnumberingTooltip(result.bonus, result.bonus);
       if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
-        console.log(`${MODULE_ID} | renderWeaponDialog: bonus unchanged (${result.bonus}); skipping`);
+        console.log(`${MODULE_ID} | renderWeaponDialog: bonus unchanged (${result.bonus}); tooltip refreshed`);
       }
       return;
     }
@@ -232,6 +257,9 @@ export function onRenderWeaponDialog(dialog, html, data) {
       dialog.context.fields.modifier = dialog.fields.modifier;
     }
     dialog[APPLIED_MARKER] = result.bonus;
+
+    // Add the tooltip entry showing the reason for the bonus.
+    addOutnumberingTooltip(result.bonus, delta);
 
     // Update the rendered input element so the user sees the new value.
     // V13 ApplicationV2 passes the rendered HTMLElement as the second hook arg.

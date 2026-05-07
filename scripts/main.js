@@ -4,7 +4,7 @@ import { EngagementTracker } from "./engagement-tracker.js";
 import { calculateOutnumbering } from "./outnumbering.js";
 import {
   onRenderWeaponDialog,
-  onRollWeaponTest,
+  onRollMeleeTest,
   onCreateChatMessage,
   onRenderChatMessage,
 } from "./roll-hooks.js";
@@ -23,7 +23,7 @@ function preflightImports() {
     EngagementTracker,
     calculateOutnumbering,
     onRenderWeaponDialog,
-    onRollWeaponTest,
+    onRollMeleeTest,
     onCreateChatMessage,
     onRenderChatMessage,
     onCombatRound,
@@ -69,13 +69,18 @@ Hooks.once("ready", () => {
   }
 });
 
-// PRE-ROLL: Inject outnumbering bonus into the WeaponDialog before the user
-// submits. This is the only mechanism that allows the bonus to affect
-// Critical/Fumble determination correctly per RAW (Core p.159-161).
+// PRE-ROLL: Inject outnumbering bonus into the WeaponDialog and TraitDialog
+// before the user submits. This is the only mechanism that allows the bonus
+// to affect Critical/Fumble determination correctly per RAW (Core p.159-161).
+// Traits are how creatures (mounts, monsters) attack; same dialog shape and
+// fields.modifier as WeaponDialog.
 Hooks.on("renderWeaponDialog", onRenderWeaponDialog);
+Hooks.on("renderTraitDialog", onRenderWeaponDialog);
 
-// POST-ROLL: Record the engagement edge.
-Hooks.on("wfrp4e:rollWeaponTest", onRollWeaponTest);
+// POST-ROLL: Record the engagement edge. Both weapon and trait attacks
+// establish engagement; we use the same handler with a different label.
+Hooks.on("wfrp4e:rollWeaponTest", (test) => onRollMeleeTest(test, "rollWeaponTest"));
+Hooks.on("wfrp4e:rollTraitTest", (test) => onRollMeleeTest(test, "rollTraitTest"));
 
 // Chat message lifecycle: attach breakdown flag, then render the panel.
 Hooks.on("createChatMessage", onCreateChatMessage);

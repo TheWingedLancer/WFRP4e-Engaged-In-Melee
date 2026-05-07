@@ -62,12 +62,17 @@ function getAttackerTokenFromDialog(dialog) {
 }
 
 /**
- * Determine if a WeaponDialog is for a melee attack against a token. If so,
- * return the target Token (placeable). Otherwise null.
+ * Determine if a dialog is for a melee attack against a token. If so, return
+ * the target Token (placeable). Otherwise null.
+ *
+ * Accepts both WeaponDialog (item.type === "weapon") and TraitDialog
+ * (item.type === "trait") — creatures attack via traits like Hooves, Bite,
+ * Claws, which behave identically to weapons for engagement purposes.
  */
 function getMeleeTargetFromDialog(dialog) {
-  const item = dialog.item ?? dialog.data?.item ?? dialog.weapon;
-  if (!item || item.type !== "weapon") return null;
+  const item = dialog.item ?? dialog.data?.item ?? dialog.weapon ?? dialog.trait;
+  if (!item) return null;
+  if (item.type !== "weapon" && item.type !== "trait") return null;
 
   // Attack type check (tolerate both bare-string and {value:string} shapes)
   const sys = item.system ?? {};
@@ -78,8 +83,10 @@ function getMeleeTargetFromDialog(dialog) {
   if (attackType === "ranged") return null;
   if (attackType && attackType !== "melee") return null;
 
-  // If attackType is missing/unknown, fall back to weaponGroup check
-  if (!attackType) {
+  // For weapons we have a weaponGroup fallback if attackType is missing.
+  // Traits don't have weaponGroup; if a trait has no attackType we
+  // conservatively skip (most combat traits do declare attackType).
+  if (!attackType && item.type === "weapon") {
     const groupRaw = sys.weaponGroup;
     const group = (groupRaw && typeof groupRaw === "object")
       ? groupRaw.value
@@ -89,12 +96,15 @@ function getMeleeTargetFromDialog(dialog) {
       "parry", "polearm", "twohanded",
     ]);
     if (!group || !meleeGroups.has(String(group).toLowerCase())) return null;
+  } else if (!attackType && item.type === "trait") {
+    // Trait without attackType: skip rather than guess
+    return null;
   }
 
   // Resolve the target. WFRP4e is inconsistent about whether `targets`
   // contains Token placeables, TokenDocuments, or Actor instances depending
   // on hook timing. Empirically:
-  //   - WeaponDialog.targets   -> Array<Token>  (placeable)
+  //   - WeaponDialog.targets / TraitDialog.targets -> Array<Token>  (placeable)
   //   - test.targets (post-roll) -> Array<ActorWFRP4e>
   //   - userTargets fallback    -> Set<Token>
   // We accept all three.
@@ -105,7 +115,6 @@ function getMeleeTargetFromDialog(dialog) {
   } else if (targets instanceof Set && targets.size > 0) {
     targetDoc = targets.values().next().value;
   }
-  // Fallback: user.targets
   if (!targetDoc) {
     const userTargets = game.user?.targets;
     if (userTargets instanceof Set && userTargets.size > 0) {
@@ -269,7 +278,7 @@ export function onRenderWeaponDialog(dialog, html, data) {
  * via the dialog's modifier field, so the system's own logic produced the
  * correct SL, Critical/Fumble status, and damage.
  */
-export async function onRollWeaponTest(test) {
+export async function onRollMeleeTest(test, hookName = "rollWeaponTest") {
   try {
     const tracker = EngagementTracker.current();
     if (!tracker) return;
@@ -278,14 +287,19 @@ export async function onRollWeaponTest(test) {
     let attacker = test.token ? resolveTokenFromMaybeActor(test.token) : null;
     if (!attacker && test.actor) attacker = resolveTokenFromMaybeActor(test.actor);
 
-    const item = test.item ?? test.weapon;
-    if (!item || item.type !== "weapon") return;
+    // Accept both weapon and trait items. Trait attacks (Hooves, Bite, etc.)
+    // are how creatures including mounts establish engagement.
+    const item = test.item ?? test.weapon ?? test.trait;
+    if (!item) return;
+    if (item.type !== "weapon" && item.type !== "trait") return;
     const sys = item.system ?? {};
     const attackTypeRaw = sys.attackType;
     const attackType = (attackTypeRaw && typeof attackTypeRaw === "object")
       ? attackTypeRaw.value
       : attackTypeRaw;
     if (attackType === "ranged") return;
+    // For traits, require explicit melee attackType — don't infer
+    if (item.type === "trait" && attackType !== "melee") return;
 
     let targetDoc = null;
     const targets = test.targets;
@@ -295,7 +309,7 @@ export async function onRollWeaponTest(test) {
 
     if (!attacker || !target) {
       if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
-        console.log(`${MODULE_ID} | rollWeaponTest: missing attacker (${attacker?.name}) or target (${target?.name})`);
+        console.log(`${MODULE_ID} | ${hookName}: missing attacker (${attacker?.name}) or target (${target?.name})`);
       }
       return;
     }
@@ -305,10 +319,10 @@ export async function onRollWeaponTest(test) {
     await tracker.engage(attacker.id, target.id, round);
 
     if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
-      console.log(`${MODULE_ID} | rollWeaponTest: engaged ${attacker.name} <-> ${target.name} (round ${round})`);
+      console.log(`${MODULE_ID} | ${hookName}: engaged ${attacker.name} <-> ${target.name} (round ${round}, item type ${item.type})`);
     }
   } catch (err) {
-    console.error(`${MODULE_ID} | rollWeaponTest hook error:`, err);
+    console.error(`${MODULE_ID} | ${hookName} hook error:`, err);
   }
 }
 

@@ -22,6 +22,15 @@ WFRP4e's Outnumbering rule (Core p.161) gives a +20 to-hit at 2-to-1 and +40 at 
 - Move a polearm-wielder away from their target → engagement holds out to their reach. Move further → engagement breaks automatically.
 - A "Disengage" button (red running figure) appears on the Token HUD whenever a token has active engagements.
 
+### Creature trait attacks
+
+Mounts, monsters, and animals attack via **Traits** (Hooves, Bite, Claws, etc.) rather than weapons. The module hooks both weapon and trait dialogs, so a war-trained mount attacking with its Hooves will:
+
+- Have the Outnumbering bonus applied to its trait test if its rider's allies are engaged with the target
+- Establish its own engagement edge with the target after attacking
+
+Trait attacks must declare `attackType: "melee"` in the trait's data (the system default for combat traits like Hooves and Bite). Ranged traits like Breath weapons or Spittle are correctly excluded.
+
 ### How the bonus is applied (technical detail)
 
 When the player opens an attack dialog targeting an engaged enemy, the module hooks the dialog's render cycle and adds the appropriate +20 or +40 to the dialog's `modifier` field — exactly as if the player had typed it in themselves, or as the system itself does for Charging and weapon Quality bonuses. The user sees the modifier in the dialog before they roll. When they submit, WFRP4e rolls against the modified target, and the system's own logic handles Critical/Fumble correctly.

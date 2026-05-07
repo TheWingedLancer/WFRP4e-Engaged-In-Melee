@@ -42,7 +42,24 @@ export class EngagementTracker {
     return stored ? foundry.utils.deepClone(stored) : {};
   }
 
+  /**
+   * Persist the graph to scene flags.
+   *
+   * IMPORTANT — Foundry setFlag semantics: setFlag uses mergeObject, which
+   * means new keys are added and existing keys are overwritten, but keys
+   * that are MISSING from the new value are NOT removed from the stored
+   * flag. So if you `delete graph[a][b]` and then call setFlag, the stored
+   * flag still has `[a][b]` from the previous write.
+   *
+   * To get true replacement semantics we unsetFlag first (clearing the old
+   * value entirely) and then setFlag with the new graph. This is two writes
+   * instead of one, but it's the only way to make deletions stick.
+   *
+   * If the new graph is empty, we just unsetFlag and skip the setFlag write.
+   */
   async _setGraph(graph) {
+    await this.scene.unsetFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
+    if (!graph || Object.keys(graph).length === 0) return null;
     return this.scene.setFlag(MODULE_ID, FLAGS.ENGAGEMENTS, graph);
   }
 

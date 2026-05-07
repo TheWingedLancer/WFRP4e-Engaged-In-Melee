@@ -20,22 +20,116 @@ import { EXCLUDED_CONDITIONS, OUTNUMBERING_BONUSES } from "./constants.js";
  */
 
 /**
- * Are two tokens allied? Allies share the same disposition sign.
- *  - FRIENDLY (1) and FRIENDLY (1) -> allies
- *  - HOSTILE (-1) and HOSTILE (-1) -> allies
- *  - NEUTRAL (0) is its own bucket; two NEUTRALs are allies, but a NEUTRAL
- *    is not allied with FRIENDLY or HOSTILE.
- *  - SECRET (-2) is treated as its own bucket too.
+ * Are two tokens allied?
  *
- * NOTE: this means a HOSTILE goblin attacking another HOSTILE goblin would
- * still treat surrounding HOSTILE allies as helping. That's intentional —
- * disposition is about which "side" a token is on, and infighting between
- * hostiles is rare. The GM can resolve edge cases manually.
+ * The Outnumbering rule (Core p.161) cares about which tokens belong to
+ * which "side" of a melee. Two tokens are allies if any of:
+ *
+ *   1. Direct disposition match. Both FRIENDLY, both HOSTILE, etc.
+ *   2. Direct mount relationship. A rider and their mount are allies.
+ *   3. Transitive via mount. If A is the mount of someone whose disposition
+ *      matches B, then A and B are allies — A inherits its rider's "side."
+ *
+ * The transitive rule is what makes a NEUTRAL warhorse count as a FRIENDLY
+ * combatant when ridden by a FRIENDLY PC. Without it, the warhorse would
+ * fail the disposition match and be skipped from outnumbering.
+ *
+ * IMPORTANT: the transitive rule only fires when one token is actually IN a
+ * mount relationship. Two random NEUTRAL tokens that happen to share
+ * disposition with a mount somewhere on the canvas don't become allies —
+ * the transitive rule needs A or B to BE the mount/rider, not just match it.
  */
 export function areAllied(tokenA, tokenB) {
   if (!tokenA || !tokenB) return false;
   if (tokenA.id === tokenB.id) return true;
-  return tokenA.document.disposition === tokenB.document.disposition;
+
+  // Direct disposition match
+  if (tokenA.document.disposition === tokenB.document.disposition) return true;
+
+  // Direct mount relationship (one rides the other)
+  if (isMountOf(tokenA, tokenB)) return true;
+  if (isMountOf(tokenB, tokenA)) return true;
+
+  // Transitive: if A is a mount, treat A as having the disposition of any
+  // of its riders. Symmetric for B.
+  //
+  // NOTE: we only inherit "upward" — a mount inherits its rider's allyships
+  // (because the mount IS part of the rider's combatant unit). We do NOT
+  // inherit "downward" — a rider doesn't gain allyships from their mount's
+  // disposition. That asymmetry matters: a FRIENDLY PC riding a NEUTRAL
+  // warhorse should not become allied with random NEUTRAL bystanders.
+  const ridersOfA = getRiders(tokenA);
+  for (const riderA of ridersOfA) {
+    if (riderA.document.disposition === tokenB.document.disposition) return true;
+  }
+  const ridersOfB = getRiders(tokenB);
+  for (const riderB of ridersOfB) {
+    if (riderB.document.disposition === tokenA.document.disposition) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get all tokens currently riding `mountToken`. Returns Token placeables.
+ */
+function getRiders(mountToken) {
+  if (!mountToken) return [];
+  const ids = mountToken.document?.flags?.Rideable?.RidersFlag;
+  if (!Array.isArray(ids)) return [];
+  return ids.map(id => canvas.tokens?.get(id)).filter(Boolean);
+}
+
+/**
+ * Get the mount that `riderToken` is currently riding. Returns Token placeable
+ * or null.
+ */
+function getMount(riderToken) {
+  if (!riderToken) return null;
+  // Check Rideable PreviousIDFlag
+  const mountTokenId = riderToken.document?.flags?.Rideable?.PreviousIDFlag;
+  if (mountTokenId) {
+    const t = canvas.tokens?.get(mountTokenId);
+    if (t) return t;
+  }
+  // Check WFRP4e native mount.id (this is an actor id, not a token id)
+  const mountActorId = riderToken.actor?.system?.status?.mount?.id
+    ?? riderToken.actor?.system?.status?.mount;
+  if (mountActorId) {
+    // Find any token with that actor on the canvas
+    for (const t of canvas.tokens?.placeables ?? []) {
+      if (t.actor?.id === mountActorId) return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * Is `mountToken` the mount of `riderToken`? Checks both WFRP4e's native
+ * mount data and the Rideable module's flags. Returns true if either says yes.
+ */
+export function isMountOf(mountToken, riderToken) {
+  if (!mountToken || !riderToken) return false;
+
+  // WFRP4e native: rider's actor.system.status.mount.id == mount's actor id
+  const riderMountActorId = riderToken.actor?.system?.status?.mount?.id
+    ?? riderToken.actor?.system?.status?.mount;
+  if (riderMountActorId && mountToken.actor?.id === riderMountActorId) return true;
+
+  // Rideable module — note the capital R on the namespace
+  const mountFlags = mountToken.document?.flags?.Rideable;
+  if (mountFlags) {
+    const riders = mountFlags.RidersFlag;
+    if (Array.isArray(riders) && riders.includes(riderToken.id)) return true;
+  }
+
+  // Inverse direction
+  const riderFlags = riderToken.document?.flags?.Rideable;
+  if (riderFlags) {
+    if (riderFlags.PreviousIDFlag === mountToken.id) return true;
+  }
+
+  return false;
 }
 
 /**

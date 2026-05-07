@@ -30,9 +30,13 @@ This means: **a roll of 66 against a Skill 54 attacker outnumbering 2:1 is corre
 
 ### Important: Disposition matters
 
-Allies are determined by **token disposition** (FRIENDLY / NEUTRAL / HOSTILE). Two tokens count as allies only if their disposition matches.
+Allies are determined by **token disposition** (FRIENDLY / NEUTRAL / HOSTILE) plus mount relationships.
 
-**Warning:** Mounts, animal companions, and many NPC followers default to **NEUTRAL** disposition in WFRP4e. This means a warhorse engaged with the same orc as your FRIENDLY PCs **will not contribute to the outnumbering count**. If you want a mount or companion to count as an ally, change its token disposition to FRIENDLY (Token Configuration → Disposition).
+- Two tokens with the **same disposition** are allies.
+- A **mount** is allied with its rider, and with all of the rider's allies. So a NEUTRAL warhorse ridden by a FRIENDLY PC counts as an ally to all FRIENDLY PCs in the fight.
+- Mount relationships are detected via WFRP4e's native mount tracking (`actor.system.status.mount`) AND the **Rideable** module's flags. Either system alone is sufficient; both together work fine.
+
+NPC followers and animal companions that aren't formal mounts default to NEUTRAL disposition. If you want them to count as allies to your FRIENDLY PCs, change their token disposition to FRIENDLY in the Token Configuration.
 
 ### Combat Tracker is optional
 

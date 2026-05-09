@@ -2,7 +2,7 @@
   "id": "wfrp4e-engaged-in-melee",
   "title": "WFRP4e Engaged In Melee",
   "description": "Tracks melee Engagement (per WFRP4e Core p.159) and automatically applies the Outnumbering to-hit bonus (+20 at 2:1, +40 at 3:1, Core p.161) to melee tests. Engagement is established by attack actions, not by distance, and persists until a full Round passes without combat. Auto-disengage on movement uses the longer of the two combatants' equipped weapon reaches (per Core p.297).",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "authors": [
     {
       "name": "TheWingedLancer",

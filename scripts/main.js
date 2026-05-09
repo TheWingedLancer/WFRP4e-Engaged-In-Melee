@@ -1,6 +1,6 @@
 import { MODULE_ID } from "./constants.js";
 import { registerSettings } from "./settings.js";
-import { EngagementTracker } from "./engagement-tracker.js";
+import { EngagementTracker, registerEngagedStatusSocket } from "./engagement-tracker.js";
 import { calculateOutnumbering } from "./outnumbering.js";
 import {
   onRenderWeaponDialog,
@@ -22,6 +22,7 @@ import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
 function preflightImports() {
   const imports = {
     EngagementTracker,
+    registerEngagedStatusSocket,
     calculateOutnumbering,
     onRenderWeaponDialog,
     onRollMeleeTest,
@@ -61,6 +62,10 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   console.log(`${MODULE_ID} | Ready`);
+
+  // Register socket listener for cross-client status effect application.
+  // Player clients send status-toggle requests to the GM via this socket.
+  registerEngagedStatusSocket();
 
   const moduleData = game.modules.get(MODULE_ID);
   if (moduleData) {

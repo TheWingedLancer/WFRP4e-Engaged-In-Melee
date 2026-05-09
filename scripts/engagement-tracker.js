@@ -1,33 +1,90 @@
 import { MODULE_ID, FLAGS, ENGAGED_STATUS_ID } from "./constants.js";
 
+const SOCKET_NAMESPACE = `module.${MODULE_ID}`;
+
+/**
+ * Register the GM-side socket listener. Called from main.js's ready hook.
+ * Listens for "setEngagedStatus" messages and applies the status change on
+ * behalf of player clients who lack actor ownership.
+ *
+ * Player clients send: { action: "setEngagedStatus", tokenId, active }
+ * GM client applies the toggle if it's the active GM.
+ */
+export function registerEngagedStatusSocket() {
+  game.socket.on(SOCKET_NAMESPACE, async (msg) => {
+    if (!msg || msg.action !== "setEngagedStatus") return;
+    // Only the active GM should respond to avoid double-application when
+    // multiple GM clients are connected.
+    if (!game.user.isGM) return;
+    if (!game.users.activeGM || game.users.activeGM.id !== game.user.id) return;
+    await applyEngagedStatusLocally(msg.tokenId, msg.active);
+  });
+}
+
+/**
+ * Apply the Engaged status toggle directly. Caller is responsible for
+ * permission checks; this just performs the mutation.
+ */
+async function applyEngagedStatusLocally(tokenId, active) {
+  try {
+    const token = canvas?.tokens?.get(tokenId);
+    if (!token?.actor) return;
+    const has = token.actor.statuses?.has(ENGAGED_STATUS_ID);
+    if (active && has) return;
+    if (!active && !has) return;
+    if (typeof token.actor.toggleStatusEffect === "function") {
+      await token.actor.toggleStatusEffect(ENGAGED_STATUS_ID, { active });
+    }
+  } catch (e) {
+    try {
+      if (game.settings.get(MODULE_ID, "debug")) {
+        console.warn(`${MODULE_ID} | applyEngagedStatusLocally(${tokenId}, ${active}) failed:`, e);
+      }
+    } catch (_) {}
+  }
+}
+
 /**
  * Helper: toggle the Engaged visual status effect on a token's actor.
- * No-ops if the token/actor doesn't exist or the user lacks permission to
- * mutate it. We try the toggle and swallow errors \u2014 a missing visual
- * indicator is non-fatal.
+ *
+ * Routing: ActiveEffect mutations require actor ownership. Player clients
+ * trying to apply Engaged to a GM-owned actor (Orc, NPC) would get a
+ * permission error. We use a socket message to route the request to the
+ * active GM, who has permission for everything.
+ *
+ * On the GM's own client, we apply directly (no socket round-trip needed).
+ *
+ * Errors are swallowed so a missing visual indicator never breaks the
+ * engagement flow.
  */
 async function setEngagedStatus(tokenId, active) {
   try {
     const token = canvas?.tokens?.get(tokenId);
     if (!token?.actor) return;
-    const has = token.actor.statuses?.has(ENGAGED_STATUS_ID);
-    if (active && has) return; // already on
-    if (!active && !has) return; // already off
-    // toggleStatusEffect is the V13 ApplicationV2 API; available on TokenDocument.
-    // We prefer actor.toggleStatusEffect since it routes through socket if the
-    // current user doesn't own the actor.
-    if (typeof token.actor.toggleStatusEffect === "function") {
-      await token.actor.toggleStatusEffect(ENGAGED_STATUS_ID, { active });
+
+    // If this user owns the actor, apply directly (avoids socket round-trip).
+    if (token.actor.isOwner) {
+      await applyEngagedStatusLocally(tokenId, active);
+      return;
     }
+
+    // Otherwise, route the request to the active GM via socket.
+    // The GM's socket listener (registerEngagedStatusSocket) handles it.
+    if (!game.users.activeGM) {
+      // No GM connected \u2014 nothing we can do. Silent fail.
+      return;
+    }
+    game.socket.emit(SOCKET_NAMESPACE, {
+      action: "setEngagedStatus",
+      tokenId,
+      active,
+    });
   } catch (e) {
-    // Permission errors, race conditions, etc. \u2014 not worth crashing over.
     try {
       if (game.settings.get(MODULE_ID, "debug")) {
         console.warn(`${MODULE_ID} | setEngagedStatus(${tokenId}, ${active}) failed:`, e);
       }
-    } catch (_) {
-      // Settings not registered yet \u2014 silently swallow.
-    }
+    } catch (_) {}
   }
 }
 

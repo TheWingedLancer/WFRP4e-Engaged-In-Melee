@@ -11,6 +11,7 @@ import {
 import { onCombatRound, onDeleteCombat, onDeleteToken } from "./combat-hooks.js";
 import { onUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
+import { openDisengageDialog, openFleeDialog } from "./disengage-flee.js";
 import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
 
 /**
@@ -31,6 +32,8 @@ function preflightImports() {
     onDeleteToken,
     onUpdateToken,
     onRenderTokenHUD,
+    openDisengageDialog,
+    openFleeDialog,
     registerSettings,
     getTokenEngagementReach,
     getEngagementThreshold,

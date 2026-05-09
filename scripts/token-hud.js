@@ -1,16 +1,21 @@
 import { MODULE_ID } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
+import { openDisengageDialog, openFleeDialog } from "./disengage-flee.js";
 
 /**
- * Token HUD: Disengage button.
+ * Token HUD: Disengage and Flee buttons.
  *
- * Adds a button to the left column of the Token HUD. When clicked, removes
- * ALL engagement edges touching this token. Useful for the "Use Advantage to
- * Disengage" case (Core p.165) and for cleaning up when the GM has manually
- * moved tokens around.
+ * Adds two buttons to the left column of the Token HUD:
+ *   - Disengage: opens a dialog letting the player choose Drop-Advantage or
+ *     Roll Dodge (Core p.165). Module applies consequences (edge drops,
+ *     Advantage adjustments) based on rolled outcomes.
+ *   - Flee: confirmation dialog, then automated free-attack flow per opponent
+ *     (+1 Adv, +20 Melee test, on hit: damage + Cool test + potential Broken),
+ *     finally Fleeing condition + drop edges (Core p.165).
  *
- * Hook: renderTokenHUD. Fires every time the HUD is rendered (i.e. every time
- * a token is selected).
+ * Buttons only appear when the selected token has at least one engagement.
+ *
+ * Hook: renderTokenHUD. Fires every time the HUD is rendered.
  */
 export function onRenderTokenHUD(hud, html, data) {
   try {
@@ -27,34 +32,44 @@ export function onRenderTokenHUD(hud, html, data) {
     // Don't double-add if Foundry re-renders.
     if (root.querySelector(`.${MODULE_ID}-disengage`)) return;
 
-    const button = document.createElement("div");
-    button.classList.add("control-icon", `${MODULE_ID}-disengage`);
-    button.dataset.action = "disengage";
-    button.title = game.i18n.localize(`${MODULE_ID}.hud.disengageTooltip`);
-    button.innerHTML = `<i class="fas fa-running"></i>`;
+    const leftColumn = root.querySelector(".col.left");
+    const target = leftColumn ?? root;
 
-    button.addEventListener("click", async (event) => {
+    // === Disengage button ===
+    const disengageBtn = document.createElement("div");
+    disengageBtn.classList.add("control-icon", `${MODULE_ID}-disengage`);
+    disengageBtn.dataset.action = "disengage";
+    disengageBtn.title = game.i18n.localize(`${MODULE_ID}.hud.disengageTooltip`);
+    disengageBtn.innerHTML = `<i class="fas fa-shield-halved"></i>`;
+    disengageBtn.addEventListener("click", async (event) => {
       event.preventDefault();
-      const t = EngagementTracker.current();
-      if (!t) return;
-      await t.disengage(tokenId);
-      ui.notifications.info(
-        game.i18n.format(`${MODULE_ID}.hud.disengageMessage`, {
-          name: data.name ?? canvas.tokens?.get(tokenId)?.name ?? "Token",
-        })
-      );
-      // Re-render the HUD so the button disappears (no engagements left).
+      const token = canvas.tokens?.get(tokenId);
+      if (!token) {
+        ui.notifications.warn("Token not found.");
+        return;
+      }
+      await openDisengageDialog(token);
+      hud.render(); // re-render so button visibility reflects new state
+    });
+    target.appendChild(disengageBtn);
+
+    // === Flee button ===
+    const fleeBtn = document.createElement("div");
+    fleeBtn.classList.add("control-icon", `${MODULE_ID}-flee`);
+    fleeBtn.dataset.action = "flee";
+    fleeBtn.title = game.i18n.localize(`${MODULE_ID}.hud.fleeTooltip`);
+    fleeBtn.innerHTML = `<i class="fas fa-running"></i>`;
+    fleeBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const token = canvas.tokens?.get(tokenId);
+      if (!token) {
+        ui.notifications.warn("Token not found.");
+        return;
+      }
+      await openFleeDialog(token);
       hud.render();
     });
-
-    // Inject into the left column. V13 token HUD has .col.left and .col.right.
-    const leftColumn = root.querySelector(".col.left");
-    if (leftColumn) {
-      leftColumn.appendChild(button);
-    } else {
-      // Fallback: append to the HUD root.
-      root.appendChild(button);
-    }
+    target.appendChild(fleeBtn);
   } catch (err) {
     console.error(`${MODULE_ID} | renderTokenHUD hook error:`, err);
   }

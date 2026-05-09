@@ -25,8 +25,9 @@
       "flipped": "Outcome flipped by Outnumbering bonus."
     },
     "hud": {
-      "disengageTooltip": "Disengage from all opponents",
-      "disengageMessage": "{name} has disengaged from all opponents."
+      "disengageTooltip": "Disengage from opponents (Drop Advantage or Roll Dodge)",
+      "disengageMessage": "{name} has disengaged from all opponents.",
+      "fleeTooltip": "Flee combat (free attacks, then Fleeing condition)"
     }
   }
 }

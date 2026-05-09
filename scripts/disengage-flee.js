@@ -258,7 +258,7 @@ async function handleDropAdvantageDisengage(token, opponents, advSpent) {
  */
 async function handleDodgeDisengage(token, opponents) {
   const tracker = EngagementTracker.current();
-  if (!tracker) return;
+  if (!tracker) return { aborted: true };
 
   const wonAgainst = [];
   const lostAgainst = [];
@@ -307,7 +307,7 @@ async function handleDodgeDisengage(token, opponents) {
 
   if (aborted) {
     ui.notifications.info("Disengage cancelled.");
-    return;
+    return { aborted: true };
   }
 
   // Step 4: full success grants +1 Advantage to PC.
@@ -345,6 +345,8 @@ async function handleDodgeDisengage(token, opponents) {
       `${MODULE_ID} | Dodge Disengage: ${token.name} won ${wonAgainst.length}, lost ${lostAgainst.length}, fullSuccess=${fullSuccess}`
     );
   }
+
+  return { aborted: false, wonAgainst, lostAgainst, fullSuccess };
 }
 
 // ============================================================================
@@ -694,12 +696,12 @@ export async function openMovementTriggerDialog(
   } else if (choice === "dodge") {
     // Roll Dodge only vs the leaving opponents. Stays engaged with the others
     // regardless of Dodge outcomes.
-    await handleDodgeDisengage(token, leavingOpponents);
-    // Replay the move regardless of Dodge outcomes \u2014 engagement is logical,
-    // not purely spatial. If the player failed Dodge against some opponents,
-    // they remain engaged with those (the edge stays) but the token still
-    // physically moves.
-    await replayMove(token, moveTarget.targetX, moveTarget.targetY);
+    const result = await handleDodgeDisengage(token, leavingOpponents);
+    // Only replay the move if the Dodge flow actually completed. If the
+    // user aborted mid-flow (closed a Dodge dialog), don't commit the move.
+    if (!result?.aborted) {
+      await replayMove(token, moveTarget.targetX, moveTarget.targetY);
+    }
   } else if (choice === "flee") {
     // Flee triggers free attacks from ALL engaged opponents (not just the
     // leaving ones), per RAW \u2014 "If you flee, your opponent immediately gains

@@ -210,8 +210,9 @@ export function onRenderWeaponDialog(dialog, html, data) {
     // Idempotence guard: if we already applied to this dialog instance, don't
     // double-apply on a subsequent re-render (e.g. user toggled a checkbox).
     // The marker stores the previously-applied bonus so we can adjust if the
-    // engagement state changed between renders.
-    const previouslyApplied = dialog[APPLIED_MARKER] ?? 0;
+    // engagement state changed between renders. (Note: the system may also
+    // re-baseline modifier when the user toggles Charging \u2014 we detect that
+    // case below and re-apply the bonus.)
 
     // Build the tooltip text per the user's preferred phrasing. We keep this
     // text-only (no value parameter to add()) because the system's tooltip
@@ -321,7 +322,30 @@ export function onRenderWeaponDialog(dialog, html, data) {
 
     const root = html instanceof HTMLElement ? html : html?.[0];
 
-    if (result.bonus === previouslyApplied) {
+    // System re-baseline detection: when the user toggles Charging (or other
+    // dialog options), the WFRP4e system re-runs its dialog setup, which
+    // resets dialog.fields.modifier to its base value (typically 0). Our
+    // APPLIED_MARKER persists on the dialog instance across these re-renders,
+    // but the modifier value no longer reflects our contribution.
+    //
+    // Detect this case: if we previously applied a non-zero bonus but the
+    // current modifier value is less than that, the system has re-baselined
+    // and we need to re-apply our bonus from scratch.
+    const previouslyApplied = dialog[APPLIED_MARKER] ?? 0;
+    const currentModifier = Number(dialog.fields.modifier) || 0;
+    const systemRebaselined = previouslyApplied > 0 && currentModifier < previouslyApplied;
+    if (systemRebaselined) {
+      // Reset our marker so the delta computation below treats this as fresh.
+      dialog[APPLIED_MARKER] = 0;
+      if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+        console.log(
+          `${MODULE_ID} | renderWeaponDialog: detected system rebaseline (had applied +${previouslyApplied}, modifier now ${currentModifier}); re-applying bonus`
+        );
+      }
+    }
+    const effectivePreviouslyApplied = systemRebaselined ? 0 : previouslyApplied;
+
+    if (result.bonus === effectivePreviouslyApplied) {
       // No bonus-value change, but the DOM may have been re-rendered.
       // Re-apply our tooltip line.
       applyOutnumberingTooltip(root, result.bonus);
@@ -332,7 +356,7 @@ export function onRenderWeaponDialog(dialog, html, data) {
     }
 
     // Adjust the modifier: subtract any previous application, add the new bonus.
-    const delta = result.bonus - previouslyApplied;
+    const delta = result.bonus - effectivePreviouslyApplied;
     if (!dialog.fields) {
       console.warn(`${MODULE_ID} | dialog.fields is missing; cannot apply outnumbering`);
       return;

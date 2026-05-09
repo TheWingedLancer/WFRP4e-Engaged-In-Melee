@@ -143,35 +143,58 @@ export async function onUpdateToken(tokenDoc, changes) {
  * Skipped when:
  *   - Setting `enableMovementTrigger` is OFF
  *   - The update has the bypass flag set (set when we replay after dialog)
- *   - The user moving the token is a GM (GMs use explicit Token HUD buttons)
  *   - The token is not engaged with anyone
  *   - No proposed change to x/y (e.g., update changing other fields)
+ *
+ * NOTE: We do NOT skip GM-moved tokens. When a GM drags an engaged enemy
+ * (Orc retreating from Tristan, etc.) the dialog should still appear because
+ * that engagement should be resolved properly. If a GM wants to do scene
+ * setup or unobstructed repositioning, they can temporarily disable the
+ * `enableMovementTrigger` setting.
  *
  * Returning `false` cancels the update; Foundry handles the snap-back
  * automatically.
  */
 export function onPreUpdateToken(tokenDoc, changes, options, userId) {
   try {
-    // Setting check
-    if (!game.settings.get(MODULE_ID, SETTINGS.ENABLE_MOVEMENT_TRIGGER)) return;
-
-    // Bypass flag from our own replay
-    if (options?.bypassEngagementCheck) return;
+    const debug = game.settings.get(MODULE_ID, SETTINGS.DEBUG);
 
     // Only react to position changes
     if (changes.x === undefined && changes.y === undefined) return;
 
-    // Skip if the user moving the token is a GM \u2014 GMs reposition NPCs for
-    // narrative/setup reasons and shouldn't be interrupted by the dialog.
-    // GMs use the explicit Token HUD buttons when they want formal disengage.
-    const movingUser = game.users.get(userId);
-    if (movingUser?.isGM) return;
+    if (debug) {
+      console.log(
+        `${MODULE_ID} | preUpdateToken FIRED for ${tokenDoc.name}: x=${changes.x ?? "(unchanged)"}, y=${changes.y ?? "(unchanged)"}, userId=${userId}, bypass=${options?.bypassEngagementCheck}`
+      );
+    }
+
+    // Setting check
+    if (!game.settings.get(MODULE_ID, SETTINGS.ENABLE_MOVEMENT_TRIGGER)) {
+      if (debug) console.log(`${MODULE_ID} | preUpdateToken: setting disabled, allowing move`);
+      return;
+    }
+
+    // Bypass flag from our own replay
+    if (options?.bypassEngagementCheck) {
+      if (debug) console.log(`${MODULE_ID} | preUpdateToken: bypass flag set, allowing move`);
+      return;
+    }
 
     const tracker = EngagementTracker.current();
-    if (!tracker) return;
+    if (!tracker) {
+      if (debug) console.log(`${MODULE_ID} | preUpdateToken: no tracker, allowing move`);
+      return;
+    }
 
     const engaged = tracker.getEngagementsFor(tokenDoc.id);
-    if (engaged.length === 0) return;
+    if (engaged.length === 0) {
+      if (debug) console.log(`${MODULE_ID} | preUpdateToken: ${tokenDoc.name} not engaged, allowing move`);
+      return;
+    }
+
+    if (debug) {
+      console.log(`${MODULE_ID} | preUpdateToken: ${tokenDoc.name} engaged with ${engaged.length} token(s); checking reach`);
+    }
 
     // Compute the projected position and check per-opponent reach.
     const movedToken = canvas.tokens?.get(tokenDoc.id);

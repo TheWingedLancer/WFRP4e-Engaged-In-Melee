@@ -43,10 +43,18 @@ function hasActiveGM() {
  */
 export function registerEngagedStatusSocket() {
   game.socket.on(SOCKET_NAMESPACE, async (msg) => {
+    // Always log received messages for diagnostics
+    console.log(`${MODULE_ID} | SOCKET RECEIVED on ${game.user.name} (isGM=${game.user.isGM}, isActiveGM=${isActiveGM()}):`, msg);
+
     if (!msg || !msg.action) return;
     // Only the active GM responds, so we don't double-apply when multiple GMs
     // are connected.
-    if (!isActiveGM()) return;
+    if (!isActiveGM()) {
+      console.log(`${MODULE_ID} | SOCKET ignored (not active GM): ${msg.action}`);
+      return;
+    }
+
+    console.log(`${MODULE_ID} | SOCKET handling ${msg.action} as active GM`);
 
     try {
       switch (msg.action) {
@@ -71,10 +79,12 @@ export function registerEngagedStatusSocket() {
         default:
           break;
       }
+      console.log(`${MODULE_ID} | SOCKET completed ${msg.action}`);
     } catch (e) {
       console.error(`${MODULE_ID} | socket handler for ${msg.action} failed:`, e);
     }
   });
+  console.log(`${MODULE_ID} | Socket listener registered on ${game.user.name} (namespace: ${SOCKET_NAMESPACE})`);
 }
 
 function getSceneById(sceneId) {
@@ -314,17 +324,15 @@ export class EngagementTracker {
   async engage(tokenIdA, tokenIdB, round = 0) {
     if (tokenIdA === tokenIdB) return;
     if (isActiveGM()) {
+      console.log(`${MODULE_ID} | engage: I am active GM, performing locally for ${tokenIdA} <-> ${tokenIdB}`);
       await performEngageLocally(this.scene.id, tokenIdA, tokenIdB, round);
       return;
     }
     if (!hasActiveGM()) {
-      try {
-        if (game.settings.get(MODULE_ID, "debug")) {
-          console.warn(`${MODULE_ID} | engage: no active GM, write skipped`);
-        }
-      } catch (_) {}
+      console.warn(`${MODULE_ID} | engage: NO ACTIVE GM, write skipped for ${tokenIdA} <-> ${tokenIdB}`);
       return;
     }
+    console.log(`${MODULE_ID} | engage: emitting socket message to GM for ${tokenIdA} <-> ${tokenIdB} (sceneId=${this.scene.id})`);
     game.socket.emit(SOCKET_NAMESPACE, {
       action: "engage",
       sceneId: this.scene.id,

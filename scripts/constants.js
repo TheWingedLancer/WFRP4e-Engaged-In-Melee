@@ -24,13 +24,16 @@ export const SETTINGS = {
 
 /**
  * Conditions that exclude an ally from contributing to the outnumbering count.
- * Per the user's design choice: Unconscious and Fleeing only. A Prone or
- * Stunned ally is still flailing about enough to be a threat.
+ * Per WFRP4e Core p.167: "Broken: You are fleeing." \u2014 the Broken condition
+ * IS the fleeing state in WFRP4e; there is no separate "Fleeing" condition.
+ * A Broken character must use their Move and Action to run away, so they
+ * don't contribute to outnumbering on either side. Unconscious characters
+ * are excluded for the same reason \u2014 they aren't actively participating.
  *
  * Condition IDs follow WFRP4e's convention (lowercase). Verify in the system
  * with: CONFIG.statusEffects.map(e => e.id)
  */
-export const EXCLUDED_CONDITIONS = ["unconscious", "fleeing"];
+export const EXCLUDED_CONDITIONS = ["unconscious", "broken"];
 
 /**
  * Thresholds for the RAW Outnumbering bonus (Core p.161).

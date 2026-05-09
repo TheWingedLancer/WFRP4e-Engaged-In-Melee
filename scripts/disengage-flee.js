@@ -514,25 +514,41 @@ async function runFleeFreeAttacks(token, opponents) {
     summary.push(lineParts.join(" \u2014 "));
   }
 
-  // After all free attacks: apply Fleeing condition and drop all edges.
-  await token.actor.addCondition("fleeing");
+  // After all free attacks: drop engagement edges and post a summary card.
+  // Per WFRP4e Core p.167, "Broken: You are fleeing" \u2014 there is no separate
+  // Fleeing condition in the system; the Broken state IS the fleeing state.
+  // Broken (if any) was already applied per RAW p.165 from failed Cool tests
+  // during the free-attack loop above. We do NOT auto-apply Broken here:
+  // RAW only requires Broken on a failed Cool test after taking damage.
+  // A character who fled successfully (no hit, or hit but Cool held) is
+  // narratively fleeing this round but isn't mechanically Broken.
+  //
+  // Each step is wrapped so a failure in one doesn't suppress the chat
+  // summary. If any step throws we log it; the user always gets a summary.
   for (const opp of opponents) {
-    await tracker.disengage(token.id, opp.id);
+    try {
+      await tracker.disengage(token.id, opp.id);
+    } catch (e) {
+      console.error(`${MODULE_ID} | Flee: failed to drop edge ${token.name} <-> ${opp.name}:`, e);
+    }
   }
 
-  // Post a single summary chat card.
-  await ChatMessage.create({
-    speaker: ChatMessage.getSpeaker({ token: token.document }),
-    content: `
-      <div class="${MODULE_ID}-chat-panel">
-        <p><strong>${esc(token.name)} fled!</strong></p>
-        <ul style="margin-top: 0.4em;">
-          ${summary.map((s) => `<li>${s}</li>`).join("")}
-        </ul>
-        <p style="font-size: 0.9em; opacity: 0.85;">Fleeing condition applied. Move directly away using your Run movement.</p>
-      </div>
-    `,
-  });
+  try {
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ token: token.document }),
+      content: `
+        <div class="${MODULE_ID}-chat-panel">
+          <p><strong>${esc(token.name)} fled!</strong></p>
+          <ul style="margin-top: 0.4em;">
+            ${summary.map((s) => `<li>${s}</li>`).join("")}
+          </ul>
+          <p style="font-size: 0.9em; opacity: 0.85;">Move directly away using your Run movement. Any Broken Conditions from failed Cool tests have been applied above. (Per Core p.167, Broken is the fleeing state.)</p>
+        </div>
+      `,
+    });
+  } catch (e) {
+    console.error(`${MODULE_ID} | Flee: failed to post summary chat card:`, e);
+  }
 
   if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
     console.log(`${MODULE_ID} | Flee complete: ${token.name} from ${opponents.length} opponents.`);
@@ -540,19 +556,23 @@ async function runFleeFreeAttacks(token, opponents) {
 }
 
 /**
- * Edge case: token tries to Flee with no engaged opponents. Just apply the
- * Fleeing condition (RAW says Fleeing can be involuntary too). No free
- * attacks happen.
+ * Edge case: token tries to Flee with no engaged opponents. Per RAW (Core
+ * p.165), Fleeing requires opponents to be a meaningful action \u2014 with no
+ * one engaged, there's nothing to flee from. We notify the user and do not
+ * auto-apply Broken (which is the fleeing condition per Core p.167).
  */
 async function handleUnopposedFlee(token) {
-  await token.actor.addCondition("fleeing");
-  await ChatMessage.create({
-    speaker: ChatMessage.getSpeaker({ token: token.document }),
-    content: `
-      <div class="${MODULE_ID}-chat-panel">
-        <p><strong>${esc(token.name)} fled.</strong></p>
-        <p>Fleeing condition applied (no engaged opponents).</p>
-      </div>
-    `,
-  });
+  try {
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ token: token.document }),
+      content: `
+        <div class="${MODULE_ID}-chat-panel">
+          <p><strong>${esc(token.name)} attempted to flee.</strong></p>
+          <p>No engaged opponents \u2014 you may simply move away normally without using the Flee action.</p>
+        </div>
+      `,
+    });
+  } catch (e) {
+    console.error(`${MODULE_ID} | Unopposed Flee: failed to post chat card:`, e);
+  }
 }

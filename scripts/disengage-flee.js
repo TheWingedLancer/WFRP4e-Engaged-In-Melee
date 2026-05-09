@@ -486,7 +486,11 @@ async function runFleeFreeAttacks(token, opponents) {
     lineParts.push("+1 more Adv on hit");
 
     // Step 6: Challenging Cool test for the fleer.
-    const coolTest = await token.actor.setupCharacteristic("cl", {
+    // Cool is a SKILL (based on Willpower), not a characteristic. setupSkill
+    // takes the skill name as a string and falls back gracefully to the
+    // underlying characteristic if the actor doesn't have the skill — same
+    // behavior we rely on for "Dodge".
+    const coolTest = await token.actor.setupSkill("Cool", {
       appendTitle: ` \u2014 Cool vs ${opp.name}'s free attack`,
       fields: { difficulty: "challenging" },
     });

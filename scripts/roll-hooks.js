@@ -471,10 +471,30 @@ export async function onRollMeleeTest(test, hookName = "rollWeaponTest") {
  */
 export async function onCreateChatMessage(message) {
   try {
+    const speakerActorId = message.speaker?.actor;
+
+    // Suppress-damage marker for Dodge-Disengage defense rolls. We set this
+    // flag locally on the message; the GM client will independently set it
+    // via setFlag (which propagates to all clients). Both clients race to
+    // set, but setFlag is idempotent so the result is the same.
+    if (speakerActorId) {
+      const suppressStash = globalThis[`__${MODULE_ID}_suppressDamage`];
+      if (suppressStash && suppressStash.has(speakerActorId)) {
+        const entry = suppressStash.get(speakerActorId);
+        if (Date.now() - entry._timestamp <= 5000) {
+          if (game.user.isGM) {
+            try {
+              await message.setFlag(MODULE_ID, FLAGS.SUPPRESS_DAMAGE_DISPLAY, true);
+            } catch (_) {}
+          }
+        }
+        suppressStash.delete(speakerActorId);
+      }
+    }
+
     const pending = globalThis[`__${MODULE_ID}_pending`];
     if (!pending || pending.size === 0) return;
 
-    const speakerActorId = message.speaker?.actor;
     if (!speakerActorId) return;
 
     const breakdown = pending.get(speakerActorId);
@@ -504,11 +524,67 @@ export async function onCreateChatMessage(message) {
  */
 export function onRenderChatMessage(message, html) {
   try {
-    const info = message.getFlag(MODULE_ID, FLAGS.OUTNUMBERING_INFO);
-    if (!info) return;
-
     const root = html instanceof HTMLElement ? html : html?.[0];
     if (!root) return;
+
+    // Suppress-damage handling for Dodge-Disengage opposed Melee tests.
+    // RAW (Core p.165) awards no damage on these \u2014 only Advantage shifts.
+    // The system's default chat card includes Damage / Hit Location / Apply
+    // Damage button which would mislead the GM into thinking damage is owed.
+    // We hide the damage-related DOM and add a clarifying note.
+    const suppressDamage = message.getFlag(MODULE_ID, FLAGS.SUPPRESS_DAMAGE_DISPLAY);
+    if (suppressDamage && !root.classList.contains(`${MODULE_ID}-damage-suppressed`)) {
+      root.classList.add(`${MODULE_ID}-damage-suppressed`);
+
+      // Multiple targeting strategies because the WFRP4e weapon card has
+      // varied across versions. We hide any element that is plainly a damage
+      // row, the Apply Damage button, or the Hit Location row (which is also
+      // moot when no damage is applied).
+      const damageSelectors = [
+        ".damage-row",
+        ".damage",
+        ".apply-damage",
+        "[data-action='applyDamage']",
+        "[data-button='applyDamage']",
+        ".chat-button.apply-damage",
+        ".dice-damage",
+      ];
+      for (const sel of damageSelectors) {
+        for (const el of root.querySelectorAll(sel)) {
+          el.style.display = "none";
+        }
+      }
+
+      // Text-based fallback: walk message-content children and hide rows that
+      // start with "Damage:" or "Hit Location:". We avoid DOM removal to be
+      // safe across rerenders \u2014 just visually hide.
+      const content = root.querySelector(".message-content") ?? root;
+      for (const child of Array.from(content.querySelectorAll("p, div, span, li"))) {
+        const txt = child.textContent?.trim() ?? "";
+        if (/^Damage\s*[:\(]/i.test(txt) || /^Hit\s*Location\s*:/i.test(txt) || /^Qualities\s*:/i.test(txt)) {
+          // Only hide if this element is "leaf-ish" \u2014 don't hide containers
+          // wrapping the entire card.
+          if (child.children.length <= 3) {
+            child.style.display = "none";
+          }
+        }
+      }
+
+      // Add a clarifying note so the GM knows why the damage section is gone.
+      if (!root.querySelector(`.${MODULE_ID}-defense-note`)) {
+        const note = document.createElement("div");
+        note.classList.add(`${MODULE_ID}-defense-note`);
+        note.style.fontSize = "0.85em";
+        note.style.opacity = "0.85";
+        note.style.marginTop = "0.4em";
+        note.style.fontStyle = "italic";
+        note.textContent = "Disengage defense \u2014 no damage applied (Core p.165).";
+        content.appendChild(note);
+      }
+    }
+
+    const info = message.getFlag(MODULE_ID, FLAGS.OUTNUMBERING_INFO);
+    if (!info) return;
     if (root.querySelector(`.${MODULE_ID}-breakdown`)) return;
 
     const panel = document.createElement("div");

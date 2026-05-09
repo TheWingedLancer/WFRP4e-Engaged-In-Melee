@@ -13,6 +13,13 @@ export const FLAGS = {
   ENGAGEMENTS: "engagements",
   /** On a chat message: the outnumbering breakdown for transparency */
   OUTNUMBERING_INFO: "outnumberingInfo",
+  /**
+   * On a chat message: when true, hide the damage line/Apply Damage button
+   * from the rendered card. Used for opposed Melee tests that defend a
+   * Dodge-Disengage \u2014 RAW awards no damage on these, so the system's
+   * default damage display is misleading.
+   */
+  SUPPRESS_DAMAGE_DISPLAY: "suppressDamageDisplay",
 };
 
 export const SETTINGS = {

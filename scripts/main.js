@@ -13,6 +13,7 @@ import { onUpdateToken, onPreUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
 import { openDisengageDialog, openFleeDialog, openMovementTriggerDialog } from "./disengage-flee.js";
 import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
+import { registerOpponentDefenseQuery } from "./opponent-defense.js";
 
 /**
  * ESM import preflight - verifies every named import resolves at module load
@@ -40,6 +41,7 @@ function preflightImports() {
     registerSettings,
     getTokenEngagementReach,
     getEngagementThreshold,
+    registerOpponentDefenseQuery,
   };
   const broken = [];
   for (const [name, ref] of Object.entries(imports)) {
@@ -58,6 +60,9 @@ Hooks.once("init", () => {
   console.log(`${MODULE_ID} | Initializing`);
   if (!preflightImports()) return;
   registerSettings();
+  // CONFIG.queries entries should be in place before any client tries to
+  // invoke a query against this user, so register during init.
+  registerOpponentDefenseQuery();
 });
 
 Hooks.once("ready", () => {

@@ -159,8 +159,22 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
   try {
     const debug = game.settings.get(MODULE_ID, SETTINGS.DEBUG);
 
-    // Only react to position changes
+    // Only react to ACTUAL position changes. WFRP4e's attack resolution
+    // updates token documents during animation/effect lifecycle and may
+    // include x/y in the change set even when the values are unchanged. We
+    // must compare the new value to the current document value, not just
+    // check for presence in `changes`.
     if (changes.x === undefined && changes.y === undefined) return;
+    const newX = changes.x ?? tokenDoc.x;
+    const newY = changes.y ?? tokenDoc.y;
+    if (newX === tokenDoc.x && newY === tokenDoc.y) {
+      if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+        console.log(
+          `${MODULE_ID} | preUpdateToken: ${tokenDoc.name} change includes x/y but values unchanged (no real movement); allowing`
+        );
+      }
+      return;
+    }
 
     if (debug) {
       console.log(

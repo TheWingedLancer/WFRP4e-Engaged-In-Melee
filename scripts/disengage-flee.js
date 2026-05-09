@@ -22,6 +22,7 @@
 
 import { MODULE_ID, SETTINGS } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
+import { requestOpponentDefense } from "./opponent-defense.js";
 
 /**
  * Minimal HTML-escape for display strings. Foundry's esc
@@ -36,75 +37,6 @@ function esc(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-/**
- * Find melee-capable items (weapons and combat traits) on an actor.
- * Returns array of items grouped by type.
- */
-function getMeleeItems(actor) {
-  const items = [];
-  for (const item of actor.items) {
-    const sys = item.system ?? {};
-    const attackType = (sys.attackType && typeof sys.attackType === "object")
-      ? sys.attackType.value
-      : sys.attackType;
-
-    if (item.type === "weapon" && attackType === "melee") {
-      items.push({ item, label: `${item.name} (Weapon)`, kind: "weapon" });
-    } else if (item.type === "trait" && attackType === "melee") {
-      items.push({ item, label: `${item.name} (Trait)`, kind: "trait" });
-    }
-  }
-  return items;
-}
-
-/**
- * Pick which weapon/trait an opponent uses. If only one melee item exists,
- * return it directly. Otherwise prompt the GM.
- *
- * Returns { item, kind } or null on cancel.
- */
-async function pickOpponentWeapon(opponent, contextLabel = "") {
-  const meleeItems = getMeleeItems(opponent.actor);
-  if (meleeItems.length === 0) {
-    ui.notifications.warn(
-      `${opponent.name} has no melee weapons or traits to attack with.`
-    );
-    return null;
-  }
-  if (meleeItems.length === 1) return meleeItems[0];
-
-  // Multiple choices — show a picker.
-  const optionsHtml = meleeItems
-    .map(
-      (m, i) =>
-        `<option value="${i}">${esc(m.label)}</option>`
-    )
-    .join("");
-  const content = `
-    <p>Which weapon or trait should ${esc(opponent.name)} use${contextLabel ? " " + contextLabel : ""}?</p>
-    <select name="pick" style="width: 100%;">${optionsHtml}</select>
-  `;
-
-  const result = await foundry.applications.api.DialogV2.wait({
-    window: { title: `Select ${opponent.name}'s weapon` },
-    content,
-    buttons: [
-      {
-        action: "ok",
-        label: "Use",
-        default: true,
-        callback: (event, button) => {
-          const idx = parseInt(button.form.elements.pick.value, 10);
-          return meleeItems[idx] ?? null;
-        },
-      },
-      { action: "cancel", label: "Cancel", callback: () => null },
-    ],
-    rejectClose: false,
-  });
-  return result ?? null;
 }
 
 /**
@@ -265,7 +197,11 @@ async function handleDodgeDisengage(token, opponents) {
   let aborted = false;
 
   for (const opp of opponents) {
-    // Step 1: PC's Dodge skill test.
+    // Step 1: PC's Dodge skill test \u2014 runs on whichever client owns the
+    // disengaging actor. If the GM clicked Disengage on a player-owned token
+    // (rare but possible), the Dodge dialog appears on the GM's client.
+    // Standard Foundry permission semantics handle this: setupSkill on a
+    // token's actor opens the dialog where it's called.
     const dodgeTest = await token.actor.setupSkill("Dodge", {
       appendTitle: ` \u2014 Disengage vs ${opp.name}`,
     });
@@ -275,26 +211,24 @@ async function handleDodgeDisengage(token, opponents) {
     }
     await dodgeTest.roll();
 
-    // Step 2: Opponent's Melee weapon/trait test.
-    const pick = await pickOpponentWeapon(opp, "to defend against the Disengage");
-    if (!pick) {
-      aborted = true;
-      break;
-    }
-    const setupFn = pick.kind === "weapon" ? "setupWeapon" : "setupTrait";
-    const meleeTest = await opp.actor[setupFn](pick.item, {
+    // Step 2: Opponent's Melee weapon/trait test \u2014 routed through the
+    // opponent-defense module so the picker and roll dialog appear on the
+    // OPPONENT's owner client (not the flow-driving client). For unowned
+    // NPCs, the test runs locally as before.
+    const oppResult = await requestOpponentDefense(opp, {
+      mode: "defense",
+      contextLabel: "to defend against the Disengage",
       appendTitle: ` \u2014 Defending vs ${token.name}'s Disengage`,
     });
-    if (!meleeTest) {
+    if (oppResult.aborted) {
       aborted = true;
       break;
     }
-    await meleeTest.roll();
 
     // Step 3: Compare numeric SL. Higher wins. Tie goes to the defender
     // (opponent) per standard opposed-test convention.
     const dodgeSL = Number(dodgeTest.data.result.baseSL ?? 0);
-    const meleeSL = Number(meleeTest.data.result.baseSL ?? 0);
+    const meleeSL = Number(oppResult.baseSL ?? 0);
 
     if (dodgeSL > meleeSL) {
       wonAgainst.push(opp);
@@ -438,41 +372,34 @@ async function runFleeFreeAttacks(token, opponents) {
     await adjustAdvantage(opp, +1);
     lineParts.push("+1 Advantage");
 
-    // Step 2: pick weapon and trigger free attack at +20.
-    const pick = await pickOpponentWeapon(opp, "for the free attack");
-    if (!pick) {
-      lineParts.push("(no melee weapon \u2014 skipped attack)");
-      summary.push(lineParts.join(" \u2014 "));
-      continue;
-    }
-
-    const setupFn = pick.kind === "weapon" ? "setupWeapon" : "setupTrait";
-    const test = await opp.actor[setupFn](pick.item, {
+    // Step 2: opponent's free attack at +20 \u2014 routed through the
+    // opponent-defense module so the picker and roll dialog appear on the
+    // OPPONENT's owner client. For unowned NPCs, runs locally as before.
+    const oppResult = await requestOpponentDefense(opp, {
+      mode: "freeAttack",
+      contextLabel: "for the free attack",
       appendTitle: ` \u2014 Free Attack vs Fleeing ${token.name}`,
-      fields: { modifier: 20 },
     });
-    if (!test) {
-      lineParts.push("(attack cancelled)");
+    if (oppResult.aborted) {
+      lineParts.push("(attack cancelled or no melee weapon)");
       summary.push(lineParts.join(" \u2014 "));
       continue;
     }
-    await test.roll();
 
-    // Step 3: read result. Note: even if the player didn't see +20 in the
-    // dialog (depending on whether `fields` actually pre-populated), we
-    // still drive consequences from whatever they rolled.
-    const outcome = test.data.result.outcome;
-    const baseSL = Number(test.data.result.baseSL ?? 0);
-    const damage = Number(test.data.result.damage ?? 0);
-    const loc = test.data.result.hitloc?.result ?? "body";
+    // Step 3: read result.
+    const outcome = oppResult.outcome;
+    const baseSL = Number(oppResult.baseSL ?? 0);
+    const damage = Number(oppResult.damage ?? 0);
+    const loc = oppResult.hitloc ?? "body";
+    const slDisplay = oppResult.SL ?? baseSL;
 
     if (outcome !== "success") {
-      lineParts.push(`attack missed (SL ${test.data.result.SL ?? baseSL})`);
+      lineParts.push(`attack missed (SL ${slDisplay})`);
       summary.push(lineParts.join(" \u2014 "));
       continue;
     }
 
-    lineParts.push(`hit for ${damage} dmg (${loc}, SL ${test.data.result.SL ?? baseSL})`);
+    lineParts.push(`hit for ${damage} dmg (${loc}, SL ${slDisplay})`);
 
     // Step 4: apply damage.
     if (damage > 0) {

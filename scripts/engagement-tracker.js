@@ -340,9 +340,14 @@ export class EngagementTracker {
       tokenIdB,
       round,
     });
-    // Optimistic local apply for owned actors (snappy UI).
-    await setEngagedStatus(tokenIdA, true);
-    await setEngagedStatus(tokenIdB, true);
+    // The GM's authoritative handler will apply the Engaged status effect to
+    // both tokens via performEngageLocally -> applyEngagedStatusLocally. We do
+    // NOT optimistically apply here: that previously caused a race where the
+    // GM client ran applyEngagedStatusLocally twice back-to-back for non-owned
+    // actors (once via socket-routed setEngagedStatus, once via
+    // performEngageLocally), resulting in duplicate Engaged status effects.
+    // The socket round-trip is fast enough on Forge that the Engaged icon
+    // appears within ~100ms — imperceptible in normal play.
   }
 
   async disengage(tokenIdA, tokenIdB = null) {

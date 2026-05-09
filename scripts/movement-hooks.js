@@ -1,6 +1,7 @@
 import { MODULE_ID, SETTINGS } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
 import { getEngagementThreshold } from "./reach.js";
+import { openMovementTriggerDialog } from "./disengage-flee.js";
 
 /**
  * Auto-disengage on movement.
@@ -126,5 +127,105 @@ export async function onUpdateToken(tokenDoc, changes) {
     }
   } catch (err) {
     console.error(`${MODULE_ID} | updateToken hook error:`, err);
+  }
+}
+
+/**
+ * Hook: preUpdateToken \u2014 movement-trigger dialog.
+ *
+ * Fires BEFORE a token position update is committed. If the token is engaged
+ * and the proposed move would leave at least one opponent's reach, we cancel
+ * the move (return false) and asynchronously open a dialog letting the
+ * player choose how to handle the disengagement (Drop Advantage, Roll Dodge,
+ * Flee, or Cancel). The dialog flow re-issues the move with a bypass flag
+ * after the player makes their choice.
+ *
+ * Skipped when:
+ *   - Setting `enableMovementTrigger` is OFF
+ *   - The update has the bypass flag set (set when we replay after dialog)
+ *   - The user moving the token is a GM (GMs use explicit Token HUD buttons)
+ *   - The token is not engaged with anyone
+ *   - No proposed change to x/y (e.g., update changing other fields)
+ *
+ * Returning `false` cancels the update; Foundry handles the snap-back
+ * automatically.
+ */
+export function onPreUpdateToken(tokenDoc, changes, options, userId) {
+  try {
+    // Setting check
+    if (!game.settings.get(MODULE_ID, SETTINGS.ENABLE_MOVEMENT_TRIGGER)) return;
+
+    // Bypass flag from our own replay
+    if (options?.bypassEngagementCheck) return;
+
+    // Only react to position changes
+    if (changes.x === undefined && changes.y === undefined) return;
+
+    // Skip if the user moving the token is a GM \u2014 GMs reposition NPCs for
+    // narrative/setup reasons and shouldn't be interrupted by the dialog.
+    // GMs use the explicit Token HUD buttons when they want formal disengage.
+    const movingUser = game.users.get(userId);
+    if (movingUser?.isGM) return;
+
+    const tracker = EngagementTracker.current();
+    if (!tracker) return;
+
+    const engaged = tracker.getEngagementsFor(tokenDoc.id);
+    if (engaged.length === 0) return;
+
+    // Compute the projected position and check per-opponent reach.
+    const movedToken = canvas.tokens?.get(tokenDoc.id);
+    if (!movedToken) return;
+    const projected = getProjectedToken(tokenDoc, changes);
+    if (!projected) return;
+
+    const floorThreshold = game.settings.get(MODULE_ID, SETTINGS.AUTO_DISENGAGE_DISTANCE);
+    const leavingOpponents = [];
+    const stayingOpponents = [];
+
+    for (const otherId of engaged) {
+      const otherToken = canvas.tokens?.get(otherId);
+      if (!otherToken) continue; // stale edge \u2014 will be cleaned up later
+      const reachThreshold = getEngagementThreshold(movedToken, otherToken);
+      const threshold = Math.max(reachThreshold, floorThreshold);
+      const dist = canvas.grid.measurePath([projected.center, otherToken.center])?.distance ?? Infinity;
+      if (dist > threshold) {
+        leavingOpponents.push(otherToken);
+      } else {
+        stayingOpponents.push(otherToken);
+      }
+    }
+
+    if (leavingOpponents.length === 0) {
+      // Move stays within everyone's reach \u2014 allow it.
+      return;
+    }
+
+    // Cancel the move. We'll replay it via tokenDoc.update with bypass flag
+    // after the dialog resolves.
+    if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+      console.log(
+        `${MODULE_ID} | preUpdateToken: ${movedToken.name} attempting to leave reach of ${leavingOpponents.length} opponent(s); intercepting`
+      );
+    }
+
+    // Capture the intended destination so the dialog flow can replay it.
+    const targetX = changes.x ?? tokenDoc.x;
+    const targetY = changes.y ?? tokenDoc.y;
+
+    // Launch the dialog asynchronously \u2014 we cannot await inside this
+    // synchronous hook. The dialog flow handles replaying the move with the
+    // bypass flag after the player chooses.
+    openMovementTriggerDialog(movedToken, leavingOpponents, stayingOpponents, {
+      targetX,
+      targetY,
+    }).catch((err) => {
+      console.error(`${MODULE_ID} | movement-trigger dialog error:`, err);
+    });
+
+    return false; // cancel the update
+  } catch (err) {
+    console.error(`${MODULE_ID} | preUpdateToken hook error:`, err);
+    // On error, fall through and allow the move \u2014 don't lock the player out.
   }
 }

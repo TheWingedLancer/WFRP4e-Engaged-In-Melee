@@ -1,4 +1,35 @@
-import { MODULE_ID, FLAGS } from "./constants.js";
+import { MODULE_ID, FLAGS, ENGAGED_STATUS_ID } from "./constants.js";
+
+/**
+ * Helper: toggle the Engaged visual status effect on a token's actor.
+ * No-ops if the token/actor doesn't exist or the user lacks permission to
+ * mutate it. We try the toggle and swallow errors \u2014 a missing visual
+ * indicator is non-fatal.
+ */
+async function setEngagedStatus(tokenId, active) {
+  try {
+    const token = canvas?.tokens?.get(tokenId);
+    if (!token?.actor) return;
+    const has = token.actor.statuses?.has(ENGAGED_STATUS_ID);
+    if (active && has) return; // already on
+    if (!active && !has) return; // already off
+    // toggleStatusEffect is the V13 ApplicationV2 API; available on TokenDocument.
+    // We prefer actor.toggleStatusEffect since it routes through socket if the
+    // current user doesn't own the actor.
+    if (typeof token.actor.toggleStatusEffect === "function") {
+      await token.actor.toggleStatusEffect(ENGAGED_STATUS_ID, { active });
+    }
+  } catch (e) {
+    // Permission errors, race conditions, etc. \u2014 not worth crashing over.
+    try {
+      if (game.settings.get(MODULE_ID, "debug")) {
+        console.warn(`${MODULE_ID} | setEngagedStatus(${tokenId}, ${active}) failed:`, e);
+      }
+    } catch (_) {
+      // Settings not registered yet \u2014 silently swallow.
+    }
+  }
+}
 
 /**
  * EngagementTracker
@@ -76,7 +107,8 @@ export class EngagementTracker {
   }
 
   /**
-   * Mark two tokens as engaged. Symmetric.
+   * Mark two tokens as engaged. Symmetric. Also applies the Engaged status
+   * effect to both tokens for visual feedback.
    */
   async engage(tokenIdA, tokenIdB, round = 0) {
     if (tokenIdA === tokenIdB) return;
@@ -87,16 +119,23 @@ export class EngagementTracker {
     graph[tokenIdA][tokenIdB] = stamp;
     graph[tokenIdB][tokenIdA] = stamp;
     await this._setGraph(graph);
+
+    // Visual: both tokens are now engaged in melee.
+    await setEngagedStatus(tokenIdA, true);
+    await setEngagedStatus(tokenIdB, true);
   }
 
   /**
    * Remove an engagement. If `tokenIdB` is omitted, drop all edges touching
-   * tokenIdA.
+   * tokenIdA. Also removes the Engaged status effect from any token whose
+   * last edge was just dropped.
    */
   async disengage(tokenIdA, tokenIdB = null) {
     const graph = this._getGraph();
+    const affectedIds = new Set([tokenIdA]);
     if (tokenIdB === null) {
       for (const otherId of Object.keys(graph[tokenIdA] ?? {})) {
+        affectedIds.add(otherId);
         if (graph[otherId]) delete graph[otherId][tokenIdA];
         if (graph[otherId] && Object.keys(graph[otherId]).length === 0) {
           delete graph[otherId];
@@ -104,6 +143,7 @@ export class EngagementTracker {
       }
       delete graph[tokenIdA];
     } else {
+      affectedIds.add(tokenIdB);
       if (graph[tokenIdA]) {
         delete graph[tokenIdA][tokenIdB];
         if (Object.keys(graph[tokenIdA]).length === 0) delete graph[tokenIdA];
@@ -114,22 +154,33 @@ export class EngagementTracker {
       }
     }
     await this._setGraph(graph);
+
+    // Visual: remove Engaged status from any token whose last edge was dropped.
+    for (const id of affectedIds) {
+      if (!graph[id] || Object.keys(graph[id]).length === 0) {
+        await setEngagedStatus(id, false);
+      }
+    }
   }
 
   /**
    * Round-based pruning. Per Core p.159: if a full Round passes without an
    * attack between two combatants, they're no longer Engaged.
    * Only affects engagements established with round > 0 (in combat).
+   * Also removes the Engaged status from any token whose last edge was pruned.
    */
   async pruneStale(currentRound) {
     const graph = this._getGraph();
     let mutated = false;
     const cutoff = currentRound - 2;
+    const affectedIds = new Set();
 
     for (const [tokenId, edges] of Object.entries(graph)) {
       for (const [otherId, stamp] of Object.entries(edges)) {
         if (stamp.round > 0 && stamp.round <= cutoff) {
           delete graph[tokenId][otherId];
+          affectedIds.add(tokenId);
+          affectedIds.add(otherId);
           mutated = true;
         }
       }
@@ -139,24 +190,35 @@ export class EngagementTracker {
       }
     }
 
-    if (mutated) await this._setGraph(graph);
+    if (mutated) {
+      await this._setGraph(graph);
+      for (const id of affectedIds) {
+        if (!graph[id] || Object.keys(graph[id]).length === 0) {
+          await setEngagedStatus(id, false);
+        }
+      }
+    }
     return mutated;
   }
 
   /**
    * Wall-clock staleness pruning. Used for skirmish (out-of-combat)
    * engagements only. Triggered opportunistically before outnumbering
-   * calculations rather than on a timer.
+   * calculations rather than on a timer. Also removes the Engaged status
+   * from any token whose last edge was pruned.
    */
   async pruneStaleByTime(maxAgeSeconds) {
     const graph = this._getGraph();
     let mutated = false;
     const cutoff = Date.now() - (maxAgeSeconds * 1000);
+    const affectedIds = new Set();
 
     for (const [tokenId, edges] of Object.entries(graph)) {
       for (const [otherId, stamp] of Object.entries(edges)) {
         if (stamp.round === 0 && stamp.timestamp < cutoff) {
           delete graph[tokenId][otherId];
+          affectedIds.add(tokenId);
+          affectedIds.add(otherId);
           mutated = true;
         }
       }
@@ -166,11 +228,23 @@ export class EngagementTracker {
       }
     }
 
-    if (mutated) await this._setGraph(graph);
+    if (mutated) {
+      await this._setGraph(graph);
+      for (const id of affectedIds) {
+        if (!graph[id] || Object.keys(graph[id]).length === 0) {
+          await setEngagedStatus(id, false);
+        }
+      }
+    }
     return mutated;
   }
 
   async clear() {
+    // Best-effort: remove Engaged from all currently-engaged tokens before clearing.
+    const graph = this._getGraph();
+    for (const tokenId of Object.keys(graph)) {
+      await setEngagedStatus(tokenId, false);
+    }
     return this.scene.unsetFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
   }
 

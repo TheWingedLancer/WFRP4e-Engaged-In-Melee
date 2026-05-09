@@ -576,3 +576,138 @@ async function handleUnopposedFlee(token) {
     console.error(`${MODULE_ID} | Unopposed Flee: failed to post chat card:`, e);
   }
 }
+
+// ============================================================================
+// MOVEMENT-TRIGGER DIALOG
+// ============================================================================
+
+/**
+ * Replay a movement that was cancelled by the preUpdateToken hook. The
+ * options.bypassEngagementCheck flag prevents the hook from re-intercepting.
+ */
+async function replayMove(token, targetX, targetY) {
+  try {
+    await token.document.update(
+      { x: targetX, y: targetY },
+      { bypassEngagementCheck: true }
+    );
+  } catch (e) {
+    console.error(`${MODULE_ID} | replayMove failed:`, e);
+  }
+}
+
+/**
+ * Entry point for the movement-trigger flow. Called by the preUpdateToken
+ * hook when a move would leave at least one opponent's reach.
+ *
+ * Presents a four-option dialog: Drop Advantage / Roll Dodge / Flee / Cancel.
+ * Each path resolves the engagement consequences and (except Cancel) replays
+ * the originally-attempted move with a bypass flag.
+ *
+ * Args:
+ *   token: the moving Token (the placeable, not the document)
+ *   leavingOpponents: array of Tokens whose reach the move would leave
+ *   stayingOpponents: array of Tokens whose reach the move stays within
+ *   moveTarget: { targetX, targetY } the destination coordinates
+ */
+export async function openMovementTriggerDialog(
+  token,
+  leavingOpponents,
+  stayingOpponents,
+  moveTarget
+) {
+  const tracker = EngagementTracker.current();
+  if (!tracker) return;
+
+  const allOpponents = [...leavingOpponents, ...stayingOpponents];
+  const myAdv = getAdvantage(token);
+  // For "Drop Advantage" eligibility we compare against ALL engaged opponents'
+  // total Adv \u2014 because Drop Advantage drops ALL edges, not just the leaving
+  // ones (per RAW: "you can move away from your opponents without penalty",
+  // plural). The cost is dropping our Adv to 0 against the whole engagement.
+  const oppTotal = allOpponents.reduce((sum, t) => sum + getAdvantage(t), 0);
+  const canDropAdv = myAdv > oppTotal;
+
+  const leavingNames = leavingOpponents.map((t) => esc(t.name)).join(", ");
+  const stayingNames = stayingOpponents.length > 0
+    ? stayingOpponents.map((t) => esc(t.name)).join(", ")
+    : null;
+
+  let stayingHtml = "";
+  if (stayingNames) {
+    stayingHtml = `<p style="font-size: 0.9em; opacity: 0.85;">You will remain engaged with: ${stayingNames}.</p>`;
+  }
+
+  const content = `
+    <div style="line-height: 1.5;">
+      <p><strong>${esc(token.name)}</strong> is moving out of reach of: <strong>${leavingNames}</strong>.</p>
+      ${stayingHtml}
+      <p>Your Advantage: <strong>${myAdv}</strong> &nbsp; | &nbsp; All opponents total: <strong>${oppTotal}</strong></p>
+      ${canDropAdv
+        ? `<p style="color: var(--color-text-light-success, green);">You may drop your Advantage to disengage from <em>all</em> opponents (Core p.165).</p>`
+        : `<p style="color: var(--color-text-light-warning, #b30);">You cannot drop Advantage to disengage \u2014 your opponents have equal or greater Advantage.</p>`}
+      <p>Choose how to handle the disengagement:</p>
+    </div>
+  `;
+
+  const buttons = [];
+
+  if (canDropAdv) {
+    buttons.push({
+      action: "drop",
+      label: `Drop Advantage (-${myAdv}, drops all)`,
+      callback: () => "drop",
+    });
+  }
+
+  buttons.push({
+    action: "dodge",
+    label: `Roll Dodge (vs ${leavingOpponents.length} opponent${leavingOpponents.length === 1 ? "" : "s"})`,
+    callback: () => "dodge",
+  });
+
+  buttons.push({
+    action: "flee",
+    label: "Flee (free attacks from all)",
+    callback: () => "flee",
+  });
+
+  buttons.push({
+    action: "cancel",
+    label: "Cancel (don't move)",
+    callback: () => "cancel",
+  });
+
+  const choice = await foundry.applications.api.DialogV2.wait({
+    window: { title: `${token.name} \u2014 Leaving combat reach` },
+    content,
+    buttons,
+    rejectClose: false,
+  });
+
+  // Handle the choice. After consequence resolution (except Cancel), replay
+  // the original move so the token actually ends up at the destination.
+  if (choice === "drop") {
+    // Drops engagement with ALL opponents (per RAW), then replay the move.
+    await handleDropAdvantageDisengage(token, allOpponents, myAdv);
+    await replayMove(token, moveTarget.targetX, moveTarget.targetY);
+  } else if (choice === "dodge") {
+    // Roll Dodge only vs the leaving opponents. Stays engaged with the others
+    // regardless of Dodge outcomes.
+    await handleDodgeDisengage(token, leavingOpponents);
+    // Replay the move regardless of Dodge outcomes \u2014 engagement is logical,
+    // not purely spatial. If the player failed Dodge against some opponents,
+    // they remain engaged with those (the edge stays) but the token still
+    // physically moves.
+    await replayMove(token, moveTarget.targetX, moveTarget.targetY);
+  } else if (choice === "flee") {
+    // Flee triggers free attacks from ALL engaged opponents (not just the
+    // leaving ones), per RAW \u2014 "If you flee, your opponent immediately gains
+    // 1 Advantage and may attempt 1 free attack" (singular "your opponent"
+    // but plural in spirit when multiply engaged).
+    await runFleeFreeAttacks(token, allOpponents);
+    await replayMove(token, moveTarget.targetX, moveTarget.targetY);
+  }
+  // "cancel" or close: do nothing; token already snapped back automatically
+  // when the preUpdateToken hook returned false.
+}

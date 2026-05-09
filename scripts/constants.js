@@ -20,20 +20,35 @@ export const SETTINGS = {
   ENABLE_AUTO_TRACKING: "enableAutoTracking",
   SKIRMISH_STALE_SECONDS: "skirmishStaleSeconds",
   DEBUG: "debug",
+  ENABLE_MOVEMENT_TRIGGER: "enableMovementTrigger",
 };
 
 /**
+ * Status effect id for the system's "Engaged" visual indicator.
+ * Verified in WFRP4e 9.4.0: CONFIG.statusEffects has an entry with id "engaged".
+ * This is a system-provided visual marker (not a RAW Condition from the
+ * official list) used to show on tokens that they are currently engaged
+ * in melee. We toggle this on/off as engagement edges are added/removed.
+ */
+export const ENGAGED_STATUS_ID = "engaged";
+
+/**
  * Conditions that exclude an ally from contributing to the outnumbering count.
- * Per WFRP4e Core p.167: "Broken: You are fleeing." \u2014 the Broken condition
- * IS the fleeing state in WFRP4e; there is no separate "Fleeing" condition.
- * A Broken character must use their Move and Action to run away, so they
- * don't contribute to outnumbering on either side. Unconscious characters
- * are excluded for the same reason \u2014 they aren't actively participating.
+ *
+ * Per WFRP4e Core p.168, a Broken character "cannot Test to rally from being
+ * Broken if you are Engaged with an enemy" \u2014 explicitly confirming that
+ * Broken/Fleeing characters CAN still be engaged with enemies. They're still
+ * in the fight, occupying space, and forcing opponents to deal with them.
+ * They just can't take normal Actions (their Move and Action must be used to
+ * run away).
+ *
+ * Therefore only Unconscious tokens are excluded from outnumbering math:
+ * an unconscious character is genuinely not participating in the fight.
  *
  * Condition IDs follow WFRP4e's convention (lowercase). Verify in the system
  * with: CONFIG.statusEffects.map(e => e.id)
  */
-export const EXCLUDED_CONDITIONS = ["unconscious", "broken"];
+export const EXCLUDED_CONDITIONS = ["unconscious"];
 
 /**
  * Thresholds for the RAW Outnumbering bonus (Core p.161).

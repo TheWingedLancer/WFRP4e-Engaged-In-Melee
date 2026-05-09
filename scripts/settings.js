@@ -33,6 +33,15 @@ export function registerSettings() {
     range: { min: 0, max: 600, step: 30 },
   });
 
+  game.settings.register(MODULE_ID, SETTINGS.ENABLE_MOVEMENT_TRIGGER, {
+    name: `${MODULE_ID}.settings.enableMovementTrigger.name`,
+    hint: `${MODULE_ID}.settings.enableMovementTrigger.hint`,
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true,
+  });
+
   game.settings.register(MODULE_ID, SETTINGS.DEBUG, {
     name: `${MODULE_ID}.settings.debug.name`,
     hint: `${MODULE_ID}.settings.debug.hint`,

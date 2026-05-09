@@ -16,6 +16,10 @@
       "debug": {
         "name": "Debug logging",
         "hint": "Log engagement state changes and outnumbering calculations to the console."
+      },
+      "enableMovementTrigger": {
+        "name": "Prompt on movement that breaks engagement",
+        "hint": "If enabled, when an engaged token tries to move out of an opponent's reach, a dialog appears offering Drop Advantage / Roll Dodge / Flee / Cancel. Movement that stays within all engaged opponents' reaches is not interrupted. Disable for fully manual control via the Token HUD buttons."
       }
     },
     "chat": {

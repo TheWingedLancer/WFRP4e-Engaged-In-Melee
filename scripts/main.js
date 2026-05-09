@@ -9,9 +9,9 @@ import {
   onRenderChatMessage,
 } from "./roll-hooks.js";
 import { onCombatRound, onDeleteCombat, onDeleteToken } from "./combat-hooks.js";
-import { onUpdateToken } from "./movement-hooks.js";
+import { onUpdateToken, onPreUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
-import { openDisengageDialog, openFleeDialog } from "./disengage-flee.js";
+import { openDisengageDialog, openFleeDialog, openMovementTriggerDialog } from "./disengage-flee.js";
 import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
 
 /**
@@ -31,9 +31,11 @@ function preflightImports() {
     onDeleteCombat,
     onDeleteToken,
     onUpdateToken,
+    onPreUpdateToken,
     onRenderTokenHUD,
     openDisengageDialog,
     openFleeDialog,
+    openMovementTriggerDialog,
     registerSettings,
     getTokenEngagementReach,
     getEngagementThreshold,
@@ -96,6 +98,10 @@ Hooks.on("deleteToken", onDeleteToken);
 
 // Movement-based auto-disengage.
 Hooks.on("updateToken", onUpdateToken);
+
+// Movement-trigger dialog: intercept moves that would leave engagement reach.
+// Returns false to cancel the move, then opens a dialog asynchronously.
+Hooks.on("preUpdateToken", onPreUpdateToken);
 
 // Manual disengage button.
 Hooks.on("renderTokenHUD", onRenderTokenHUD);

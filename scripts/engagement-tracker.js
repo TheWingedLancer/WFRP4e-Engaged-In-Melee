@@ -76,6 +76,9 @@ export function registerEngagedStatusSocket() {
         case "clear":
           await performClearLocally(msg.sceneId);
           break;
+        case "setActorAdvantageDelta":
+          await performActorAdvantageDeltaLocally(msg.tokenId, msg.delta);
+          break;
         default:
           break;
       }
@@ -286,6 +289,57 @@ async function performClearLocally(sceneId) {
     await applyEngagedStatusLocally(tokenId, false);
   }
   await scene.unsetFlag(MODULE_ID, FLAGS.ENGAGEMENTS);
+}
+
+/**
+ * Apply a delta to a token's Advantage, clamped to >= 0. Called on the GM
+ * client (which has write permission on any actor) or directly on an owner
+ * client. Returns the new value, or null if the token couldn't be found.
+ *
+ * Used by the Dodge-Disengage and Flee flows when a player-driven client
+ * needs to mutate Advantage on a GM-owned opponent (or vice versa): the
+ * caller checks isOwner on the actor and routes through the socket if not.
+ */
+async function performActorAdvantageDeltaLocally(tokenId, delta) {
+  const token = canvas.tokens?.get(tokenId);
+  if (!token?.actor) {
+    console.warn(`${MODULE_ID} | performActorAdvantageDeltaLocally: token ${tokenId} not found or has no actor`);
+    return null;
+  }
+  const cur = Number(token.actor.system?.status?.advantage?.value ?? 0);
+  const next = Math.max(0, cur + Number(delta || 0));
+  try {
+    await token.actor.update({ "system.status.advantage.value": next });
+  } catch (e) {
+    console.error(`${MODULE_ID} | failed to set Advantage on ${token.name}:`, e);
+    return null;
+  }
+  return next;
+}
+
+/**
+ * Public helper: adjust a token's Advantage by a delta. Runs locally if the
+ * current client owns the actor; otherwise emits a socket message to the
+ * active GM to perform the write.
+ *
+ * Returns void (fire-and-forget for the socket-routed case). Callers that
+ * need the new value should either be GM-owners themselves or read it back
+ * after a short delay.
+ */
+export async function applyActorAdvantageDelta(token, delta) {
+  if (!token?.id) return;
+  // Local write if we own the actor (covers GM and player-PC cases).
+  if (token.actor?.isOwner) {
+    await performActorAdvantageDeltaLocally(token.id, delta);
+    return;
+  }
+  // Otherwise, route to the active GM via the existing socket namespace.
+  console.log(`${MODULE_ID} | applyActorAdvantageDelta: emitting socket message to GM for ${token.name} delta=${delta}`);
+  game.socket.emit(SOCKET_NAMESPACE, {
+    action: "setActorAdvantageDelta",
+    tokenId: token.id,
+    delta: Number(delta || 0),
+  });
 }
 
 // ============================================================================

@@ -231,108 +231,60 @@ export function onRenderWeaponDialog(dialog, html, data) {
 
     // Patch the rendered modifier tooltip in the DOM.
     //
-    // The system's tooltip pipeline (start → effects-add → finish → render)
-    // completes BEFORE our renderWeaponDialog hook fires, so calling
-    // dialog.tooltips.add() at this point correctly updates the in-memory
-    // list but the rendered HTML in the DOM is already stale.
+    // v0.1.23 \u2014 DOM-direct approach. Prior versions called into
+    // dialog.tooltips._modifier.list and dialog.tooltips._formatTooltip() to
+    // participate in the system's tooltip-list machinery. Empirically, this
+    // proved unreliable across rounds: a freshly-opened WeaponDialog
+    // instance sometimes inherited stale list contents from a previous
+    // dialog (the system's BaseDialogTooltips object reuses _modifier state
+    // in ways we couldn't predict), and our edits to list were either
+    // overwritten or applied to a different object than what got rendered.
     //
-    // Strategy: call dialog.tooltips.add() (correctly updates the list with
-    // both mount-bonus and ours), then call dialog.tooltips._formatTooltip()
-    // which regenerates the full HTML from the list, and write that HTML
-    // back to the DOM tooltip element.
+    // The fix: stop touching dialog.tooltips entirely. Read the current
+    // data-tooltip attribute from the DOM (which is what the system has
+    // already finalized), strip any prior outnumbering entry we wrote on
+    // a previous render, append a fresh entry, write back. Deferred via
+    // setTimeout(0) so any synchronous post-render setAttribute the
+    // system does happens FIRST and we land on top of it.
+    //
+    // Tooltip text we write is matched by the literal HTML pattern
+    // `<p>&#8226; Bonus for outnumbering ... </p>` so re-render cleanup is
+    // a simple string operation.
     function applyOutnumberingTooltip(rootEl, bonusValue) {
       try {
-        if (!rootEl || bonusValue === 0 || !dialog.tooltips) return;
-
+        if (!rootEl || bonusValue === 0) return;
         const reasonText = buildTooltipReason(bonusValue);
+        const ourLine = `<p>&#8226; ${reasonText}</p>`;
 
-        // Update the in-memory list. First, remove any prior outnumbering
-        // entry we added (so re-renders don't accumulate duplicates).
-        const list = dialog.tooltips._modifier?.list;
-        if (Array.isArray(list)) {
-          for (let i = list.length - 1; i >= 0; i--) {
-            const src = list[i]?.source ?? "";
-            if (typeof src === "string" && src.startsWith("Bonus for outnumbering")) {
-              list.splice(i, 1);
+        // Defer so the system's render-finish work (which may write
+        // data-tooltip attributes for other contributors like Charging or
+        // weapon qualities) lands first. We then read and amend.
+        setTimeout(() => {
+          try {
+            const modInput = rootEl.querySelector('input[name="modifier"]');
+            if (!modInput) return;
+            const formFields = modInput.closest('.form-fields');
+            const formGroup = modInput.closest('.form-group');
+
+            // Strip any prior outnumbering entry we wrote. The pattern
+            // tolerates both &#8226; and a literal bullet, in case some
+            // future render path normalizes the entity.
+            const stripOursRe = /<p>\s*(?:&#8226;|\u2022|\u00b7)\s*Bonus for outnumbering[^<]*<\/p>/gi;
+
+            // Strategy: write to BOTH the input and the form-fields/form-group
+            // surfaces. The hover area can be either depending on dialog
+            // version, and writing to both ensures the tooltip surfaces
+            // regardless of which one the cursor lands on. We preserve any
+            // existing tooltip content from system contributors.
+            for (const el of [modInput, formFields, formGroup].filter(Boolean)) {
+              const existing = (el.getAttribute('data-tooltip') ?? '').replace(stripOursRe, '');
+              const combined = existing.trim() ? existing + ourLine : ourLine;
+              el.setAttribute('data-tooltip', combined);
             }
+          } catch (e) {
+            console.warn(`${MODULE_ID} | tooltip DOM patch (deferred) failed:`, e);
           }
-        }
-        // Add our entry with value=undefined so the formatter does NOT
-        // append "(+40)" automatically — our reason text already includes
-        // "(+40):" in the middle. The add() method requires truthy value
-        // and source, so we bypass it and push directly.
-        if (Array.isArray(list)) {
-          list.push({ value: undefined, source: reasonText });
-        }
-
-        // Regenerate the full tooltip HTML from the list. There are three
-        // cases:
-        //  1. List exists with content (other contributors AND ours): the
-        //     formatter renders the full multi-line tooltip.
-        //  2. List exists but only has our entry: in some WFRP4e versions
-        //     _formatTooltip returns empty/undefined when it can't find
-        //     "real" contributions \u2014 we MUST fall back to our own HTML
-        //     so the tooltip still shows for outnumbering-only attacks.
-        //  3. List is undefined entirely: _modifier wasn't initialized this
-        //     render cycle (no other contributions; common after round 1
-        //     when no Charging/qualities apply). Same fallback as case 2.
-        //
-        // Previous versions returned early on falsy html, which is what
-        // caused tooltip inconsistency after round 1: the system's list
-        // would be empty/uninit, formatter returned nothing, and our entry
-        // (whether on the list or not) was lost.
-        let html;
-        try {
-          html = dialog.tooltips._formatTooltip("modifier", true);
-        } catch (e) {
-          html = null;
-        }
-        // Always-show fallback: if the formatter didn't give us HTML
-        // containing our reason text, build minimal HTML ourselves so the
-        // outnumbering bonus always has a tooltip.
-        if (!html || (typeof html === "string" && !html.includes(reasonText))) {
-          html = `<p>&#8226; ${reasonText}</p>`;
-        }
-
-        // Find the modifier tooltip div in the DOM. The system only renders
-        // a [data-tooltip] element for a field when something contributed to
-        // it during the render cycle. For attacks like Boots's Hooves trait
-        // where ours is the only contribution, no tooltip element exists and
-        // we must create one.
-        const modInput = rootEl.querySelector('input[name="modifier"]');
-        if (!modInput) return;
-
-        // The system places its tooltip div as a sibling within the same
-        // `.form-group` row as the input. We look for one first.
-        let tipEl = null;
-        const formGroup = modInput.closest('.form-group');
-        if (formGroup) {
-          tipEl = formGroup.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button):not(li)');
-        }
-        // Fallback: walk up the ancestor chain.
-        if (!tipEl) {
-          let walker = modInput.parentElement;
-          for (let depth = 0; depth < 4 && walker && !tipEl; depth++) {
-            tipEl = walker.querySelector(':scope > [data-tooltip], :scope [data-tooltip]:not(button):not(li)');
-            if (!tipEl) walker = walker.parentElement;
-          }
-        }
-
-        if (tipEl) {
-          // Update existing tooltip element.
-          tipEl.setAttribute("data-tooltip", html);
-        } else {
-          // No existing tooltip element — attach to the modifier input
-          // itself. Hovering the input surfaces the tooltip. This is the
-          // case for trait attacks where ours is the only contribution.
-          modInput.setAttribute("data-tooltip", html);
-          // Also attach to the form-fields container so hovering the area
-          // around the input (not just precisely on it) shows the tooltip.
-          const formFields = modInput.closest('.form-fields');
-          if (formFields) {
-            formFields.setAttribute("data-tooltip", html);
-          }
-        }
+        }, 0);
       } catch (e) {
         console.warn(`${MODULE_ID} | tooltip DOM patch failed:`, e);
       }

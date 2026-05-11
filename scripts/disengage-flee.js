@@ -21,7 +21,7 @@
  */
 
 import { MODULE_ID, SETTINGS } from "./constants.js";
-import { EngagementTracker } from "./engagement-tracker.js";
+import { EngagementTracker, applyActorAdvantageDelta } from "./engagement-tracker.js";
 import { requestOpponentDefense } from "./opponent-defense.js";
 
 /**
@@ -47,21 +47,38 @@ function getAdvantage(token) {
 }
 
 /**
- * Adjust an actor's Advantage by a delta (can be negative). Returns the new
- * value. Uses the same actor.update path the system uses internally.
+ * Adjust an actor's Advantage by a delta (can be negative). Returns nothing
+ * (the socket-routed path is fire-and-forget); for the most-recent value,
+ * read token.actor.system.status.advantage.value after a tick.
+ *
+ * v0.1.23: routes through applyActorAdvantageDelta so the write happens on
+ * a client that has OWNER permission. When a player flow needs to bump a
+ * GM-owned opponent's Advantage (lost Dodge against, free-attack hit), the
+ * delta is sent via socket to the active GM. When the GM flow needs to
+ * bump a player-owned PC's Advantage, same path (local for GM since GMs
+ * own everything by default, but the helper handles it uniformly).
  */
 async function adjustAdvantage(token, delta) {
-  const cur = getAdvantage(token);
-  const next = Math.max(0, cur + delta);
-  await token.actor.update({ "system.status.advantage.value": next });
-  return next;
+  await applyActorAdvantageDelta(token, delta);
 }
 
 /**
  * Set an actor's Advantage to an exact value.
+ *
+ * v0.1.23: also routes through the socket helper. Implemented as a "compute
+ * delta from current value" so we can reuse the same socket action. The
+ * snapshot of current Advantage is taken on the calling client; if the
+ * actor is mutated between the snapshot and the GM applying the delta,
+ * the result will be off \u2014 but this is fine because adjustAdvantage is
+ * already the typical path, and setAdvantage is only used at the start of
+ * the Drop-Advantage flow where Advantage is well-known.
  */
 async function setAdvantage(token, value) {
-  await token.actor.update({ "system.status.advantage.value": Math.max(0, value) });
+  const cur = Number(token.actor?.system?.status?.advantage?.value ?? 0);
+  const target = Math.max(0, Number(value || 0));
+  const delta = target - cur;
+  if (delta === 0) return;
+  await applyActorAdvantageDelta(token, delta);
 }
 
 // ============================================================================
@@ -234,13 +251,22 @@ async function handleDodgeDisengage(token, opponents, { movementBlocked = false 
     }
 
     // Step 3: Compare numeric SL. Higher wins. Tie goes to the defender
-    // (opponent) per standard opposed-test convention.
+    // (opponent) per standard opposed-test convention. Record who beat whom
+    // for the summary report and per-opponent Advantage tick.
+    //
+    // Note (v0.1.23): we do NOT drop the engagement edge here even when the
+    // PC beats this individual opponent. Per RAW reading: a Disengage is
+    // "all or nothing" \u2014 you only break free of opponents (drop edges and
+    // gain +1 Advantage) on a FULL success against every opponent. Partial
+    // success means the disengage attempt as a whole failed; you stay
+    // engaged with everyone. The won/lost lists exist only to report which
+    // individual rolls succeeded and to give the lost opponents their +1
+    // Advantage per RAW.
     const dodgeSL = Number(dodgeTest.data.result.baseSL ?? 0);
     const meleeSL = Number(oppResult.baseSL ?? 0);
 
     if (dodgeSL > meleeSL) {
       wonAgainst.push(opp);
-      await tracker.disengage(token.id, opp.id);
     } else {
       lostAgainst.push(opp);
       await adjustAdvantage(opp, +1);
@@ -252,10 +278,15 @@ async function handleDodgeDisengage(token, opponents, { movementBlocked = false 
     return { aborted: true };
   }
 
-  // Step 4: full success grants +1 Advantage to PC.
+  // Step 4 (v0.1.23): full success grants +1 Advantage to PC AND drops all
+  // tested engagement edges. Per RAW reading: a Disengage is "all or
+  // nothing" \u2014 partial success leaves all engagements intact.
   const fullSuccess = lostAgainst.length === 0 && wonAgainst.length === opponents.length;
   if (fullSuccess) {
     await adjustAdvantage(token, +1);
+    for (const opp of wonAgainst) {
+      await tracker.disengage(token.id, opp.id);
+    }
   }
 
   // Post chat summary.
@@ -269,10 +300,14 @@ async function handleDodgeDisengage(token, opponents, { movementBlocked = false 
     summaryHtml += `<p style="color: var(--color-text-light-success, green);">\u2705 Escaped from all opponents. Gained +1 Advantage.</p>`;
     summaryHtml += `<p>Beat: ${wonStr}</p>`;
   } else if (wonAgainst.length > 0) {
-    summaryHtml += `<p>Partial success: dropped engagement with ${wonStr}, but failed to escape ${lostStr}.</p>`;
-    summaryHtml += `<p style="font-size: 0.9em; opacity: 0.85;">Each opponent who beat the Dodge gained +1 Advantage.</p>`;
+    // Partial success: per v0.1.23 ruling, no edges drop. The won list is
+    // shown for transparency about individual rolls, but the disengage as
+    // a whole failed and the PC stays engaged with EVERYONE.
+    summaryHtml += `<p style="color: var(--color-text-light-warning, #b30);">\u274c Partial success \u2014 disengage failed.</p>`;
+    summaryHtml += `<p>Beat: ${wonStr}. Lost to: ${lostStr}.</p>`;
+    summaryHtml += `<p style="font-size: 0.9em; opacity: 0.85;">You remain engaged with all opponents. Each opponent who beat the Dodge gained +1 Advantage.</p>`;
     if (movementBlocked) {
-      summaryHtml += `<p style="color: var(--color-text-light-warning, #b30); font-size: 0.9em;">Move blocked \u2014 you didn't fully escape. Use <strong>Flee</strong> on your next attempt to leave anyway (at the cost of free attacks).</p>`;
+      summaryHtml += `<p style="color: var(--color-text-light-warning, #b30); font-size: 0.9em;">Move blocked. Use <strong>Flee</strong> on your next attempt to leave anyway (at the cost of free attacks).</p>`;
     }
   } else {
     summaryHtml += `<p style="color: var(--color-text-light-warning, #b30);">\u274c Failed to escape any opponents.</p>`;

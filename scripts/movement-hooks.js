@@ -232,11 +232,37 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
       // ends when neither party can threaten the other.
       const reachThreshold = getMoverInterceptThreshold(movedToken, otherToken);
       const threshold = Math.max(reachThreshold, floorThreshold);
+
+      // CROSSING-THRESHOLD model (v0.1.23): the dialog fires only when the
+      // mover is actually LEAVING the opponent's reach \u2014 pre-move within
+      // reach, post-move outside it. If the mover was already outside the
+      // opponent's reach before this move (e.g., Igor with a 6yd pike was
+      // engaged with Orc 1 with a 2yd hand weapon at 6yd center-to-center),
+      // they were never in the opponent's threat zone in the first place
+      // and stepping farther away does not constitute "leaving reach."
+      //
+      // The engagement edge itself still exists and is still meaningful for
+      // outnumbering and rule purposes \u2014 it's the dialog (which exists to
+      // give the opponent a chance to intercept) that is suppressed.
+      const preDist = canvas.grid.measurePath([movedToken.center, otherToken.center])?.distance ?? Infinity;
       const dist = canvas.grid.measurePath([projected.center, otherToken.center])?.distance ?? Infinity;
-      if (dist > threshold) {
+      const wasWithinReach = preDist <= threshold;
+      const willBeOutsideReach = dist > threshold;
+
+      if (wasWithinReach && willBeOutsideReach) {
         leavingOpponents.push(otherToken);
       } else {
         stayingOpponents.push(otherToken);
+      }
+
+      if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+        console.log(
+          `${MODULE_ID} | preUpdateToken: ${movedToken.name} vs ${otherToken.name}: ` +
+          `threshold=${threshold}yd (reach=${reachThreshold}, floor=${floorThreshold}), ` +
+          `pre=${preDist.toFixed(1)}yd, post=${dist.toFixed(1)}yd, ` +
+          `wasWithinReach=${wasWithinReach}, willBeOutsideReach=${willBeOutsideReach}, ` +
+          `leaving=${wasWithinReach && willBeOutsideReach}`
+        );
       }
     }
 

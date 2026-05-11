@@ -12,7 +12,7 @@ import { onCombatRound, onDeleteCombat, onDeleteToken } from "./combat-hooks.js"
 import { onUpdateToken, onPreUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
 import { openDisengageDialog, openFleeDialog, openMovementTriggerDialog } from "./disengage-flee.js";
-import { getTokenEngagementReach, getEngagementThreshold } from "./reach.js";
+import { getTokenEngagementReach, getEngagementThreshold, getMoverInterceptThreshold } from "./reach.js";
 import { registerOpponentDefenseQuery } from "./opponent-defense.js";
 
 /**
@@ -41,6 +41,7 @@ function preflightImports() {
     registerSettings,
     getTokenEngagementReach,
     getEngagementThreshold,
+    getMoverInterceptThreshold,
     registerOpponentDefenseQuery,
   };
   const broken = [];
@@ -79,6 +80,7 @@ Hooks.once("ready", () => {
       calculateOutnumbering,
       getTokenEngagementReach,
       getEngagementThreshold,
+      getMoverInterceptThreshold,
       getCurrentTracker: () => EngagementTracker.current(),
     };
   }

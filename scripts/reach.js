@@ -138,11 +138,38 @@ export function getTokenEngagementReach(token) {
  * remain engaged as long as either one can still threaten the other with
  * their currently-equipped weapon — so the threshold is the MAX of both
  * tokens' reaches.
+ *
+ * Used for the silent auto-disengage check (post-move): the engagement edge
+ * persists as long as either party could plausibly reach the other.
  */
 export function getEngagementThreshold(tokenA, tokenB) {
   const reachA = getTokenEngagementReach(tokenA);
   const reachB = getTokenEngagementReach(tokenB);
   return Math.max(reachA, reachB);
+}
+
+/**
+ * Compute the threshold at which a MOVER leaves an OPPONENT's intercept
+ * range. This is asymmetric: it returns ONLY the opponent's reach, because
+ * the opponent can only intercept (force a Disengage test) if their weapon
+ * can reach the mover.
+ *
+ * Per WFRP4e Core p.165 Disengage rules: "If you choose to move away from a
+ * foe engaged with you..." — the action is about leaving a foe's *threat*,
+ * which depends on the foe's weapon, not the mover's. A pike-wielder
+ * stepping back from a dagger-wielder can move freely (the dagger cannot
+ * reach them at any distance > 2yd); a dagger-wielder stepping back from a
+ * pike-wielder must Disengage (the pike still threatens them at up to 6yd).
+ *
+ * Concrete case: Igor (Pike, 6yd reach) is engaged with Orc 1 (Hand Weapon,
+ * 2yd reach). They are at 6yd center-to-center. Igor moves to 8yd. From
+ * Orc 1's perspective, Igor was always outside Orc 1's 2yd reach \u2014 Orc 1
+ * cannot prevent the move. NO Disengage dialog fires.
+ *
+ * Used by onPreUpdateToken to decide whether to fire the dialog.
+ */
+export function getMoverInterceptThreshold(mover, opponent) {
+  return getTokenEngagementReach(opponent);
 }
 
 // Exposed for testing

@@ -265,16 +265,34 @@ export function onRenderWeaponDialog(dialog, html, data) {
           list.push({ value: undefined, source: reasonText });
         }
 
-        // Regenerate the full tooltip HTML from the list.
+        // Regenerate the full tooltip HTML from the list. There are three
+        // cases:
+        //  1. List exists with content (other contributors AND ours): the
+        //     formatter renders the full multi-line tooltip.
+        //  2. List exists but only has our entry: in some WFRP4e versions
+        //     _formatTooltip returns empty/undefined when it can't find
+        //     "real" contributions \u2014 we MUST fall back to our own HTML
+        //     so the tooltip still shows for outnumbering-only attacks.
+        //  3. List is undefined entirely: _modifier wasn't initialized this
+        //     render cycle (no other contributions; common after round 1
+        //     when no Charging/qualities apply). Same fallback as case 2.
+        //
+        // Previous versions returned early on falsy html, which is what
+        // caused tooltip inconsistency after round 1: the system's list
+        // would be empty/uninit, formatter returned nothing, and our entry
+        // (whether on the list or not) was lost.
         let html;
         try {
           html = dialog.tooltips._formatTooltip("modifier", true);
         } catch (e) {
-          // If the formatter signature differs, fall back to building it
-          // ourselves in the same format.
+          html = null;
+        }
+        // Always-show fallback: if the formatter didn't give us HTML
+        // containing our reason text, build minimal HTML ourselves so the
+        // outnumbering bonus always has a tooltip.
+        if (!html || (typeof html === "string" && !html.includes(reasonText))) {
           html = `<p>&#8226; ${reasonText}</p>`;
         }
-        if (!html) return;
 
         // Find the modifier tooltip div in the DOM. The system only renders
         // a [data-tooltip] element for a field when something contributed to
@@ -472,23 +490,30 @@ export async function onRollMeleeTest(test, hookName = "rollWeaponTest") {
 export async function onCreateChatMessage(message) {
   try {
     const speakerActorId = message.speaker?.actor;
+    const speakerTokenId = message.speaker?.token;
 
-    // Suppress-damage marker for Dodge-Disengage defense rolls. We set this
-    // flag locally on the message; the GM client will independently set it
-    // via setFlag (which propagates to all clients). Both clients race to
-    // set, but setFlag is idempotent so the result is the same.
-    if (speakerActorId) {
+    // Suppress-damage marker for Dodge-Disengage defense rolls. The marker
+    // is keyed by token id (stable across linked/synthetic actors and matches
+    // message.speaker.token). The client that created the chat message is
+    // also the client that populated the stash (both happen during
+    // runOpponentTestLocally), so the stash entry is local to this client.
+    //
+    // We do NOT gate this on isGM \u2014 the message author (player or GM) is
+    // the one who can set flags on their own message. Once the flag lands,
+    // Foundry's normal document sync propagates it to all other clients so
+    // their renderChatMessageHTML hooks can hide the damage UI too.
+    if (speakerTokenId) {
       const suppressStash = globalThis[`__${MODULE_ID}_suppressDamage`];
-      if (suppressStash && suppressStash.has(speakerActorId)) {
-        const entry = suppressStash.get(speakerActorId);
+      if (suppressStash && suppressStash.has(speakerTokenId)) {
+        const entry = suppressStash.get(speakerTokenId);
         if (Date.now() - entry._timestamp <= 5000) {
-          if (game.user.isGM) {
-            try {
-              await message.setFlag(MODULE_ID, FLAGS.SUPPRESS_DAMAGE_DISPLAY, true);
-            } catch (_) {}
+          try {
+            await message.setFlag(MODULE_ID, FLAGS.SUPPRESS_DAMAGE_DISPLAY, true);
+          } catch (err) {
+            console.warn(`${MODULE_ID} | could not set suppress-damage flag on message:`, err);
           }
         }
-        suppressStash.delete(speakerActorId);
+        suppressStash.delete(speakerTokenId);
       }
     }
 
@@ -555,17 +580,36 @@ export function onRenderChatMessage(message, html) {
         }
       }
 
-      // Text-based fallback: walk message-content children and hide rows that
-      // start with "Damage:" or "Hit Location:". We avoid DOM removal to be
-      // safe across rerenders \u2014 just visually hide.
+      // Text-based fallback: WFRP4e's weapon card structure (verified in
+      // 9.4.0) puts these as <p> rows containing a <strong>Label:</strong>
+      // followed by the value. We walk leaf-ish elements and check the
+      // initial label text. We also look for "<strong>Damage</strong>" or
+      // similar inline labels.
       const content = root.querySelector(".message-content") ?? root;
-      for (const child of Array.from(content.querySelectorAll("p, div, span, li"))) {
-        const txt = child.textContent?.trim() ?? "";
-        if (/^Damage\s*[:\(]/i.test(txt) || /^Hit\s*Location\s*:/i.test(txt) || /^Qualities\s*:/i.test(txt)) {
-          // Only hide if this element is "leaf-ish" \u2014 don't hide containers
-          // wrapping the entire card.
-          if (child.children.length <= 3) {
+      const damageLabelRe = /^(damage|hit\s*location|qualities)\b/i;
+      const rowSelectors = ["p", "div", "li", "span"];
+      for (const sel of rowSelectors) {
+        for (const child of Array.from(content.querySelectorAll(sel))) {
+          // Skip our own elements and large containers.
+          if (child.classList.contains(`${MODULE_ID}-defense-note`)) continue;
+          if (child.classList.contains(`${MODULE_ID}-breakdown`)) continue;
+          if (child.children.length > 6) continue;
+
+          // First try the leading text of the element (handles
+          // "Damage: 13" plain text).
+          const firstText = child.textContent?.trim() ?? "";
+          if (damageLabelRe.test(firstText)) {
             child.style.display = "none";
+            continue;
+          }
+
+          // Then try inline labels: <strong>Damage:</strong>...
+          const label = child.querySelector("strong, b, .label");
+          if (label) {
+            const labelText = label.textContent?.trim() ?? "";
+            if (damageLabelRe.test(labelText)) {
+              child.style.display = "none";
+            }
           }
         }
       }

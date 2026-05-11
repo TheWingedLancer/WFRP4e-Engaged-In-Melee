@@ -1,6 +1,6 @@
 import { MODULE_ID, SETTINGS } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
-import { getEngagementThreshold } from "./reach.js";
+import { getEngagementThreshold, getMoverInterceptThreshold } from "./reach.js";
 import { openMovementTriggerDialog } from "./disengage-flee.js";
 
 /**
@@ -223,7 +223,14 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
     for (const otherId of engaged) {
       const otherToken = canvas.tokens?.get(otherId);
       if (!otherToken) continue; // stale edge \u2014 will be cleaned up later
-      const reachThreshold = getEngagementThreshold(movedToken, otherToken);
+      // Use the OPPONENT's reach only (not max of both). The opponent can
+      // only intercept the move if their weapon can reach the mover \u2014 a
+      // dagger-wielder cannot stop a pike-wielder from stepping back, even
+      // if the engagement was originally formed by the pike at long range.
+      // The auto-disengage check in onUpdateToken still uses the symmetric
+      // MAX threshold for dropping the edge, which is correct: engagement
+      // ends when neither party can threaten the other.
+      const reachThreshold = getMoverInterceptThreshold(movedToken, otherToken);
       const threshold = Math.max(reachThreshold, floorThreshold);
       const dist = canvas.grid.measurePath([projected.center, otherToken.center])?.distance ?? Infinity;
       if (dist > threshold) {

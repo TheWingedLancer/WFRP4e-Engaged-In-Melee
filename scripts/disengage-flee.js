@@ -187,8 +187,16 @@ async function handleDropAdvantageDisengage(token, opponents, advSpent) {
  * Per RAW (strict reading): "If you succeed, you gain +1 Advantage" \u2014
  * singular success. "Each opponent defeating you gains +1 Advantage" \u2014
  * partial success allowed for individual edges.
+ *
+ * Args:
+ *   token: the disengaging actor's token
+ *   opponents: tokens to roll against
+ *   options.movementBlocked: when true, the chat card calls out that the
+ *     attempted move was blocked because the Dodge wasn't fully successful.
+ *     Used by the movement-trigger flow but not by the Token-HUD flow (which
+ *     has no pending move to block).
  */
-async function handleDodgeDisengage(token, opponents) {
+async function handleDodgeDisengage(token, opponents, { movementBlocked = false } = {}) {
   const tracker = EngagementTracker.current();
   if (!tracker) return { aborted: true };
 
@@ -263,9 +271,15 @@ async function handleDodgeDisengage(token, opponents) {
   } else if (wonAgainst.length > 0) {
     summaryHtml += `<p>Partial success: dropped engagement with ${wonStr}, but failed to escape ${lostStr}.</p>`;
     summaryHtml += `<p style="font-size: 0.9em; opacity: 0.85;">Each opponent who beat the Dodge gained +1 Advantage.</p>`;
+    if (movementBlocked) {
+      summaryHtml += `<p style="color: var(--color-text-light-warning, #b30); font-size: 0.9em;">Move blocked \u2014 you didn't fully escape. Use <strong>Flee</strong> on your next attempt to leave anyway (at the cost of free attacks).</p>`;
+    }
   } else {
     summaryHtml += `<p style="color: var(--color-text-light-warning, #b30);">\u274c Failed to escape any opponents.</p>`;
     summaryHtml += `<p>Lost to: ${lostStr}. Each gained +1 Advantage.</p>`;
+    if (movementBlocked) {
+      summaryHtml += `<p style="color: var(--color-text-light-warning, #b30); font-size: 0.9em;">Move blocked. Use <strong>Flee</strong> on your next attempt to leave anyway (at the cost of free attacks).</p>`;
+    }
   }
   summaryHtml += `</div>`;
 
@@ -621,14 +635,20 @@ export async function openMovementTriggerDialog(
     await handleDropAdvantageDisengage(token, allOpponents, myAdv);
     await replayMove(token, moveTarget.targetX, moveTarget.targetY);
   } else if (choice === "dodge") {
-    // Roll Dodge only vs the leaving opponents. Stays engaged with the others
-    // regardless of Dodge outcomes.
-    const result = await handleDodgeDisengage(token, leavingOpponents);
-    // Only replay the move if the Dodge flow actually completed. If the
-    // user aborted mid-flow (closed a Dodge dialog), don't commit the move.
-    if (!result?.aborted) {
+    // Roll Dodge only vs the leaving opponents. Per RAW Core p.165 strict
+    // reading: a failed Dodge means the disengage attempt itself failed, so
+    // the move is BLOCKED. The player can re-attempt with Flee on their
+    // next move if they want to leave anyway (at the cost of free attacks).
+    // We only replay the move on a full success (beat ALL leaving opponents).
+    // Partial success also blocks the move \u2014 you didn't fully escape so
+    // you don't move. (The won-edges still drop per handleDodgeDisengage.)
+    const result = await handleDodgeDisengage(token, leavingOpponents, { movementBlocked: true });
+    if (result?.fullSuccess === true) {
       await replayMove(token, moveTarget.targetX, moveTarget.targetY);
     }
+    // Failed/partial/aborted: token snaps back automatically (preUpdateToken
+    // already returned false). handleDodgeDisengage's own chat card explains
+    // the outcome to the player, including the "move blocked" guidance.
   } else if (choice === "flee") {
     // Flee triggers free attacks from ALL engaged opponents (not just the
     // leaving ones), per RAW \u2014 "If you flee, your opponent immediately gains

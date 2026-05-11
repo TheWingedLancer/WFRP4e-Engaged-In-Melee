@@ -173,11 +173,22 @@ async function runOpponentTestLocally({ token, mode, contextLabel, appendTitle, 
   // Damage line and an Apply Damage button. Per RAW (Core p.165), no damage
   // is awarded on these opposed tests \u2014 only Advantage shifts. Stash a
   // marker so onCreateChatMessage can flag the resulting message for the
-  // damage-suppression render hook. Marker is keyed by actor id and is
-  // self-expiring (5 second TTL) to prevent leaking onto unrelated rolls.
+  // damage-suppression render hook.
+  //
+  // Important: we key by TOKEN id (not actor id) because synthetic
+  // (unlinked) tokens carry an actor delta whose id can differ between the
+  // token actor and the world actor. message.speaker.token, by contrast, is
+  // the literal token id on the canvas and matches what we have here.
+  //
+  // The stash lives only on whichever client called runOpponentTestLocally
+  // \u2014 that's also the client that test.roll() will create the chat message
+  // on, so onCreateChatMessage will see the same stash entry. Other clients
+  // receiving the message via sync find their (local, empty) stash and
+  // no-op. 5-second TTL prevents leaking onto unrelated rolls if a test is
+  // cancelled mid-flight.
   if (mode === "defense") {
     const stash = (globalThis[`__${MODULE_ID}_suppressDamage`] ||= new Map());
-    stash.set(token.actor.id, { _timestamp: Date.now() });
+    stash.set(token.id, { _timestamp: Date.now() });
   }
 
   await test.roll();
@@ -215,8 +226,72 @@ function findActiveHumanOwner(actor) {
 }
 
 /**
+ * Find an active GM user. For unowned NPCs (no human owner) the GM is the
+ * de facto controller; we route opponent-side rolls there. If multiple GMs
+ * are active, prefer the designated activeGM if available.
+ */
+function findActiveGM() {
+  if (!game.users) return null;
+  const activeGM = game.users.activeGM;
+  if (activeGM && activeGM.active) return activeGM;
+  for (const user of game.users) {
+    if (user.active && user.isGM) return user;
+  }
+  return null;
+}
+
+/**
+ * Delegate the opponent-side test to another user's client via CONFIG.queries.
+ * Returns the same result shape as runOpponentTestLocally, or { aborted: true }
+ * on timeout / error / disconnect.
+ */
+async function queryRemoteUser(targetUser, opponentToken, payload) {
+  try {
+    const result = await targetUser.query(
+      QUERY_ID,
+      {
+        tokenId: opponentToken.id,
+        ...payload,
+      },
+      { timeout: QUERY_TIMEOUT_MS }
+    );
+    if (!result || typeof result !== "object") return { aborted: true };
+    return result;
+  } catch (err) {
+    console.warn(
+      `${MODULE_ID} | requestOpponentDefense: query to ${targetUser.name} for ${opponentToken.name} failed (${err?.message ?? err})`
+    );
+    try {
+      await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ token: opponentToken.document }),
+        content: `
+          <div class="${MODULE_ID}-chat-panel">
+            <p><strong>${esc(opponentToken.name)}</strong> did not respond to the defense request \u2014 test skipped.</p>
+          </div>
+        `,
+      });
+    } catch (_) {}
+    return { aborted: true };
+  }
+}
+
+/**
  * Public entry point. Called from the flow-driving client (whoever clicked
  * the Disengage/Flee button or triggered the movement dialog).
+ *
+ * Routing (in order):
+ *   1. If THIS client owns the opponent's actor (player owning their PC),
+ *      run locally. Dialogs appear on the current client.
+ *   2. If an active human OWNS the opponent (someone else's PC, or a
+ *      shared NPC with an assigned player owner), query that human.
+ *   3. No human owner. If THIS client is the GM, run locally \u2014 the GM
+ *      is the de facto controller of unowned NPCs.
+ *   4. No human owner and THIS client is NOT the GM (e.g., a player just
+ *      triggered Disengage against a GM-controlled orc). Query the
+ *      active GM so the picker/roll dialog opens on the GM's screen.
+ *      Without this routing the dialog would open on the player's screen
+ *      \u2014 they'd be rolling the orc's defense for the GM, which is wrong.
+ *   5. No GM available either: return aborted. We can't proxy.
  *
  * Args:
  *   opponentToken: the Token placeable for the opponent
@@ -228,69 +303,42 @@ function findActiveHumanOwner(actor) {
  */
 export async function requestOpponentDefense(opponentToken, { mode, contextLabel, appendTitle }) {
   const modifier = mode === "freeAttack" ? 20 : 0;
+  const payload = { mode, contextLabel, appendTitle, modifier };
 
-  // Path 1: this client owns the opponent's actor — run locally.
+  // Path 1: this client owns the opponent's actor \u2014 run locally.
+  // (Exclude GMs from this branch: GMs "own" everything, but we want
+  // unowned-NPC routing to fall through to Path 3 below where the GM
+  // also runs locally with the right semantics.)
   if (opponentToken.actor.isOwner && !game.user.isGM) {
-    return runOpponentTestLocally({
-      token: opponentToken,
-      mode,
-      contextLabel,
-      appendTitle,
-      modifier,
-    });
+    return runOpponentTestLocally({ token: opponentToken, ...payload });
   }
 
-  // Path 2: find an active human owner and delegate to their client.
-  const owner = findActiveHumanOwner(opponentToken.actor);
-  if (owner && owner.id !== game.user.id) {
-    try {
-      const result = await owner.query(
-        QUERY_ID,
-        {
-          tokenId: opponentToken.id,
-          mode,
-          contextLabel,
-          appendTitle,
-          modifier,
-        },
-        { timeout: QUERY_TIMEOUT_MS }
-      );
-      // Defensive: if the queried client returned malformed data, treat as
-      // aborted so the caller doesn't apply phantom consequences.
-      if (!result || typeof result !== "object") {
-        return { aborted: true };
-      }
-      return result;
-    } catch (err) {
-      console.warn(
-        `${MODULE_ID} | requestOpponentDefense: query to ${owner.name} for ${opponentToken.name} failed (${err?.message ?? err}); falling back to local execution`
-      );
-      // Timeout, network failure, or remote exception. Post a chat note and
-      // skip the test. The Disengage flow treats this as "opponent did not
-      // defend" — usually means the player went AFK.
-      try {
-        await ChatMessage.create({
-          speaker: ChatMessage.getSpeaker({ token: opponentToken.document }),
-          content: `
-            <div class="${MODULE_ID}-chat-panel">
-              <p><strong>${esc(opponentToken.name)}</strong> did not respond to the defense request \u2014 test skipped.</p>
-            </div>
-          `,
-        });
-      } catch (_) {}
-      return { aborted: true };
-    }
+  // Path 2: an active human player owns the opponent \u2014 delegate to them.
+  const humanOwner = findActiveHumanOwner(opponentToken.actor);
+  if (humanOwner && humanOwner.id !== game.user.id) {
+    return queryRemoteUser(humanOwner, opponentToken, payload);
   }
 
-  // Path 3: no active human owner — run locally on this client. For unowned
-  // NPCs driven by the GM, this is the same flow as v0.1.20 and earlier.
-  return runOpponentTestLocally({
-    token: opponentToken,
-    mode,
-    contextLabel,
-    appendTitle,
-    modifier,
-  });
+  // Path 3: no human owner. If THIS client is the GM, run locally.
+  if (game.user.isGM) {
+    return runOpponentTestLocally({ token: opponentToken, ...payload });
+  }
+
+  // Path 4: no human owner and we're not the GM. Route the test to the GM
+  // so their client opens the picker and roll dialog. This is the common
+  // case for a player attempting to Disengage from a GM-controlled enemy:
+  // before this routing, the orc's weapon-pick and attack roll appeared on
+  // the player's screen, which is wrong.
+  const gm = findActiveGM();
+  if (gm) {
+    return queryRemoteUser(gm, opponentToken, payload);
+  }
+
+  // Path 5: no GM online. We genuinely cannot proxy this. Abort and log.
+  console.warn(
+    `${MODULE_ID} | requestOpponentDefense: no human owner and no active GM for ${opponentToken.name}; cannot proxy defense test`
+  );
+  return { aborted: true };
 }
 
 /**

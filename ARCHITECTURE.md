@@ -314,6 +314,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **There is no "Fleeing" condition.** Broken IS the fleeing state per Core p.167. (v0.1.14 fix.)
 - **Cool is a skill, not a characteristic.** `setupSkill("Cool")` not `setupCharacteristic("cl")`. (v0.1.13 fix.)
 - **DOM-direct tooltip patching beats participating in `dialog.tooltips`.** The system's tooltip object model reuses state across dialog instances in unpredictable ways; writing data-tooltip attributes directly is more robust. (v0.1.23 fix.)
+- **WFRP4e item shapes vary across versions and custom content.** The `isWeaponMelee` helper in `reach.js` handles `attackType.value`, `attackType`, missing `attackType`, and `weaponGroup` as a fallback. Reuse it everywhere "is this a melee weapon" matters; don't reimplement the detection in each caller. (v0.1.25 refactor.)
 
 ## Version progression (high level)
 
@@ -330,6 +331,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.22:** Failed Dodge blocks movement. Damage-line suppression on Dodge defense cards. Outnumbering tooltip always-show fallback. Asymmetric mover-intercept reach. Player-vs-GM-owned-opponent rolls route to GM.
 - **v0.1.23:** Crossing-threshold model for move-intercept. Advantage writes routed through GM socket. Partial Dodge success keeps all edges. DOM-direct tooltip patching.
 - **v0.1.24:** Documentation polish. Fixed stale header comment in `constants.js`. Added per-setting JSDoc to `settings.js`. Added top-of-file architecture summary to `main.js`. Refreshed README's Design notes section. No behavior changes.
+- **v0.1.25:** Defensive hardening from automated code review. Tooltip helper now strips its prior contribution even when current bonus is 0 (prevents stale tooltip when user retargets mid-dialog). `preUpdateToken` proactively prunes stale engagement edges when an opponent token is missing from canvas instead of leaving them for next pruning cycle. `isWeaponMelee` extracted from `reach.js` as a shared helper used by both reach calculation and opponent-defense weapon picker; gives the picker the same weaponGroup fallback for items with missing `attackType`. No observable behavior changes in normal play.
 
 ## Known cleanup candidates
 

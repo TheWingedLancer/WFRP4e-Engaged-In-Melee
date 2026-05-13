@@ -252,9 +252,10 @@ export function onRenderWeaponDialog(dialog, html, data) {
     // a simple string operation.
     function applyOutnumberingTooltip(rootEl, bonusValue) {
       try {
-        if (!rootEl || bonusValue === 0) return;
-        const reasonText = buildTooltipReason(bonusValue);
-        const ourLine = `<p>&#8226; ${reasonText}</p>`;
+        if (!rootEl) return;
+        const stripOursRe = /<p>\s*(?:&#8226;|\u2022|\u00b7)\s*Bonus for outnumbering[^<]*<\/p>/gi;
+        const reasonText = bonusValue === 0 ? null : buildTooltipReason(bonusValue);
+        const ourLine = reasonText ? `<p>&#8226; ${reasonText}</p>` : null;
 
         // Defer so the system's render-finish work (which may write
         // data-tooltip attributes for other contributors like Charging or
@@ -266,11 +267,6 @@ export function onRenderWeaponDialog(dialog, html, data) {
             const formFields = modInput.closest('.form-fields');
             const formGroup = modInput.closest('.form-group');
 
-            // Strip any prior outnumbering entry we wrote. The pattern
-            // tolerates both &#8226; and a literal bullet, in case some
-            // future render path normalizes the entity.
-            const stripOursRe = /<p>\s*(?:&#8226;|\u2022|\u00b7)\s*Bonus for outnumbering[^<]*<\/p>/gi;
-
             // Strategy: write to BOTH the input and the form-fields/form-group
             // surfaces. The hover area can be either depending on dialog
             // version, and writing to both ensures the tooltip surfaces
@@ -278,8 +274,12 @@ export function onRenderWeaponDialog(dialog, html, data) {
             // existing tooltip content from system contributors.
             for (const el of [modInput, formFields, formGroup].filter(Boolean)) {
               const existing = (el.getAttribute('data-tooltip') ?? '').replace(stripOursRe, '');
-              const combined = existing.trim() ? existing + ourLine : ourLine;
-              el.setAttribute('data-tooltip', combined);
+              const combined = ourLine && existing.trim() ? existing + ourLine : (ourLine || existing);
+              if (combined) {
+                el.setAttribute('data-tooltip', combined);
+              } else {
+                el.removeAttribute('data-tooltip');
+              }
             }
           } catch (e) {
             console.warn(`${MODULE_ID} | tooltip DOM patch (deferred) failed:`, e);

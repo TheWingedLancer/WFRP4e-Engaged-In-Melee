@@ -37,6 +37,7 @@
  */
 
 import { MODULE_ID } from "./constants.js";
+import { isWeaponMelee } from "./reach.js";
 
 const QUERY_ID = `${MODULE_ID}.opponentDefense`;
 // Five minutes — players take real time to click weapon pickers and roll
@@ -58,23 +59,37 @@ function esc(str) {
 }
 
 /**
- * Find melee-capable items on an actor. Mirrors the helper in
- * disengage-flee.js. We re-implement here so this module can be loaded
- * standalone (e.g., the query handler runs on a player client, which still
- * needs to walk the opponent's items locally).
+ * Find melee-capable items on an actor.
+ *
+ * Uses the shared isWeaponMelee helper from reach.js for weapon detection,
+ * which gives us the weaponGroup fallback for items where attackType is
+ * missing (custom items, older data shapes). Trait detection stays strict
+ * on attackType because traits don't have a weaponGroup field \u2014 the
+ * only signal we have is the explicit attackType: "melee" declaration.
+ * In practice every compendium creature trait sets this correctly; the
+ * gap is only for hand-crafted custom traits, and a stricter check is
+ * better than a fuzzy name-based heuristic that could false-positive.
+ *
+ * The equipped flag is intentionally NOT filtered here: opponent-side
+ * defense and free-attack flows offer whatever the opponent carries, since
+ * NPC stat blocks frequently leave "equipped" inconsistent. The user
+ * picking the weapon makes the final call.
  */
 function getMeleeItems(actor) {
   const items = [];
   for (const item of actor.items) {
-    const sys = item.system ?? {};
-    const attackType = (sys.attackType && typeof sys.attackType === "object")
-      ? sys.attackType.value
-      : sys.attackType;
-
-    if (item.type === "weapon" && attackType === "melee") {
-      items.push({ itemId: item.id, label: `${item.name} (Weapon)`, kind: "weapon" });
-    } else if (item.type === "trait" && attackType === "melee") {
-      items.push({ itemId: item.id, label: `${item.name} (Trait)`, kind: "trait" });
+    if (item.type === "weapon") {
+      if (isWeaponMelee(item)) {
+        items.push({ itemId: item.id, label: `${item.name} (Weapon)`, kind: "weapon" });
+      }
+    } else if (item.type === "trait") {
+      const sys = item.system ?? {};
+      const attackType = (sys.attackType && typeof sys.attackType === "object")
+        ? sys.attackType.value
+        : sys.attackType;
+      if (attackType === "melee") {
+        items.push({ itemId: item.id, label: `${item.name} (Trait)`, kind: "trait" });
+      }
     }
   }
   return items;

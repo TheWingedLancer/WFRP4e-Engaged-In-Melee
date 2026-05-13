@@ -222,7 +222,24 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
 
     for (const otherId of engaged) {
       const otherToken = canvas.tokens?.get(otherId);
-      if (!otherToken) continue; // stale edge \u2014 will be cleaned up later
+      if (!otherToken) {
+        // Stale edge: the opponent token is no longer on the canvas (deleted,
+        // moved off-scene, etc.). Drop the edge proactively instead of
+        // leaving it for the next pruning cycle. tracker.disengage routes
+        // through the GM via socket if we're a non-GM client.
+        if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+          console.log(
+            `${MODULE_ID} | preUpdateToken: pruning stale edge ${tokenDoc.id} <-> ${otherId} (opponent token not on canvas)`
+          );
+        }
+        // Fire-and-forget: we don't need to await this before deciding the
+        // current move, because the missing-from-canvas opponent already
+        // can't intercept us regardless of graph state.
+        tracker.disengage(tokenDoc.id, otherId).catch((err) =>
+          console.warn(`${MODULE_ID} | failed to prune stale edge ${otherId}:`, err)
+        );
+        continue;
+      }
       // Use the OPPONENT's reach only (not max of both). The opponent can
       // only intercept the move if their weapon can reach the mover \u2014 a
       // dagger-wielder cannot stop a pike-wielder from stepping back, even

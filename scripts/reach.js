@@ -78,37 +78,59 @@ export function reachKeyToYards(key) {
 }
 
 /**
- * Is this item an equipped melee weapon?
+ * Set of weapon-group keys that indicate a melee weapon. Used as a fallback
+ * when an item lacks a clear attackType field (custom items, older data
+ * shapes, mid-migration saves).
  *
- * "Melee" is determined by the absence of a ranged attackType. WFRP4e items
- * use system.attackType = "melee" | "ranged"; if missing, fall back to
- * checking weaponGroup against known melee groups.
+ * This list mirrors WFRP4e's canonical melee weapon groups. Any group not
+ * in this list is assumed ranged (bows, slings, blackpowder, throwing,
+ * entangling) so we err on the side of "exclude" when uncertain \u2014
+ * better to use default reach (2yd) than to accidentally treat a bow as a
+ * melee weapon and miscalculate engagement.
  */
-function isEquippedMeleeWeapon(item) {
-  if (!item || item.type !== "weapon") return false;
+const MELEE_WEAPON_GROUPS = new Set([
+  "basic", "cavalry", "fencing", "brawling", "flail",
+  "parry", "polearm", "twohanded",
+]);
 
+/**
+ * Is this item a melee weapon (regardless of equipped state)?
+ *
+ * Used by both the reach calculator (which also requires equipped) and the
+ * opponent-defense weapon picker (which considers carried weapons even when
+ * not currently equipped, since NPC stat blocks often leave "equipped"
+ * inconsistent).
+ *
+ * Detection order:
+ *   1. attackType === "melee" \u2192 yes
+ *   2. attackType === "ranged" \u2192 no
+ *   3. attackType missing \u2192 fall back to weaponGroup match against
+ *      MELEE_WEAPON_GROUPS
+ *   4. Still ambiguous \u2192 no (conservative default)
+ */
+export function isWeaponMelee(item) {
+  if (!item || item.type !== "weapon") return false;
   const sys = item.system ?? {};
 
-  // Equipped check (handle both old and new shapes)
-  const equipped = sys.equipped?.value ?? sys.equipped;
-  if (!equipped) return false;
-
-  // Melee check
   const attackType = sys.attackType?.value ?? sys.attackType;
-  if (attackType === "ranged") return false;
   if (attackType === "melee") return true;
+  if (attackType === "ranged") return false;
 
-  // Fallback by weapon group
   const group = sys.weaponGroup?.value ?? sys.weaponGroup;
-  const meleeGroups = new Set([
-    "basic", "cavalry", "fencing", "brawling", "flail",
-    "parry", "polearm", "twohanded",
-  ]);
-  if (group && meleeGroups.has(String(group).toLowerCase())) return true;
+  if (group && MELEE_WEAPON_GROUPS.has(String(group).toLowerCase())) return true;
 
-  // If we still can't tell, exclude — better to use default reach than to
-  // accidentally treat a bow as a 2-yard weapon (it's not, it's ranged).
   return false;
+}
+
+/**
+ * Is this item an equipped melee weapon? Adds the equipped-state filter on
+ * top of isWeaponMelee. Used by getTokenEngagementReach so only the weapons
+ * the token can actually swing contribute to reach.
+ */
+function isEquippedMeleeWeapon(item) {
+  if (!isWeaponMelee(item)) return false;
+  const equipped = item.system?.equipped?.value ?? item.system?.equipped;
+  return Boolean(equipped);
 }
 
 /**

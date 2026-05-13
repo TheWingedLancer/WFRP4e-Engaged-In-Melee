@@ -1,3 +1,44 @@
+/**
+ * Module entry point.
+ *
+ * This file is intentionally small. It does three things:
+ *
+ *   1. PREFLIGHT: verify every named import resolves at module load time
+ *      (preflightImports). Catches docblock truncation, circular import
+ *      bugs, and missing exports immediately on world load rather than at
+ *      first attack \u2014 saves a lot of debugging time.
+ *
+ *   2. LIFECYCLE: register the init/ready hooks. Settings registration and
+ *      CONFIG.queries registration happen in init; socket listener and the
+ *      public API surface go up in ready.
+ *
+ *   3. HOOK WIRING: connect every Foundry/system hook to its handler in the
+ *      appropriate file. The handlers themselves live elsewhere; this file
+ *      just plumbs them in.
+ *
+ * For the bigger picture \u2014 the engagement model, the three pure
+ * services, the socket layer, the Disengage/Flee flows \u2014 see
+ * ARCHITECTURE.md at the repo root.
+ *
+ * File-level responsibilities (brief recap):
+ *   - constants.js          IDs, flags, settings keys, condition exclusions
+ *   - settings.js           Foundry settings registration
+ *   - engagement-tracker.js Graph storage, GM-authoritative socket layer,
+ *                           advantage-write helper
+ *   - outnumbering.js       The math, plus areAllied (disposition + mounts)
+ *   - reach.js              Weapon reach in yards; symmetric and asymmetric
+ *                           threshold functions
+ *   - roll-hooks.js         Pre-roll bonus injection, post-roll engagement
+ *                           recording, chat breakdown panel, damage suppression
+ *   - movement-hooks.js     preUpdateToken (dialog trigger) and updateToken
+ *                           (auto-disengage)
+ *   - combat-hooks.js       Round-based pruning, combat end, token deletion
+ *   - token-hud.js          Disengage and Flee buttons
+ *   - disengage-flee.js     Disengage decision, Flee free-attack loop,
+ *                           movement-trigger dialog
+ *   - opponent-defense.js   CONFIG.queries routing of opponent-side
+ *                           weapon-pick + roll dialogs to opponent's owner
+ */
 import { MODULE_ID } from "./constants.js";
 import { registerSettings } from "./settings.js";
 import { EngagementTracker, registerEngagedStatusSocket } from "./engagement-tracker.js";

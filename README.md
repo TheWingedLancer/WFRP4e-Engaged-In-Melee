@@ -78,7 +78,7 @@ The module exposes a small API on the module's data, useful for macros:
 ```js
 const api = game.modules.get("wfrp4e-engaged-in-melee").api;
 
-// Get the active tracker for the current combat
+// Get the active tracker for the current scene
 const tracker = api.getCurrentTracker();
 
 // Who is the selected token engaged with?
@@ -86,23 +86,45 @@ const engaged = tracker?.getEngagementsFor(token.id);
 
 // What's the engagement reach of a token's currently equipped weapons?
 const reach = api.getTokenEngagementReach(token);
+
+// Symmetric MAX reach (used internally for auto-disengage decisions)
+const engThreshold = api.getEngagementThreshold(tokenA, tokenB);
+
+// Asymmetric reach: returns just the opponent's reach (used internally
+// for the movement-trigger dialog). A long-weapon attacker stepping back
+// from a short-weapon opponent: the opponent's reach is what matters.
+const moveThreshold = api.getMoverInterceptThreshold(mover, opponent);
+
+// Compute the outnumbering breakdown for a hypothetical attack
+const result = api.calculateOutnumbering(attacker, defender, tracker);
+// { bonus: 0|20|40, ratio: "2:1", attackerSideCount, defenderSideCount, ... }
 ```
 
 ## Design notes
 
 The module is built around three small, separable services:
 
-- `EngagementTracker` — manages the engagement graph, stored as a flag on the active Combat document so it persists across reloads and syncs to all clients.
-- `Outnumbering` calculator — given attacker, defender, and a tracker, returns the to-hit bonus and the breakdown.
-- `Reach` resolver — extracts engagement reach from a token's equipped melee weapons.
+- `EngagementTracker` — manages the engagement graph, stored as a flag on the active **Scene** document so it persists across reloads, syncs to all clients, and works whether or not a Combat is running. Player clients can't write scene flags directly; all writes route through the active GM via a socket layer so the state stays consistent across the table.
+- `Outnumbering` calculator — given attacker, defender, and a tracker, returns the to-hit bonus and the breakdown. Allyship is determined by token disposition plus mount transitive rules.
+- `Reach` resolver — extracts engagement reach from a token's equipped melee weapons. Two threshold functions: a symmetric `getEngagementThreshold(a, b) = MAX(reachA, reachB)` used for the post-move auto-disengage check, and an asymmetric `getMoverInterceptThreshold(mover, opponent) = reach(opponent)` used for the movement-trigger dialog (a dagger-wielder cannot stop a pike-wielder from stepping back).
 
-Hook integration:
+Foundry hook integration:
 
-- `wfrp4e:preRollTest` — injects the Outnumbering modifier before the roll.
-- `wfrp4e:rollTest` — marks attacker and defender as Engaged.
-- `combatRound` — prunes stale engagements at the start of each new round.
-- `updateToken` — auto-disengages on out-of-reach movement.
-- `renderTokenHUD` — adds the manual Disengage button.
+- `renderWeaponDialog` / `renderTraitDialog` — inject the Outnumbering bonus into the dialog's `modifier` field before the user rolls, so the bonus correctly affects Critical/Fumble determination per RAW.
+- `wfrp4e:rollWeaponTest` / `wfrp4e:rollTraitTest` — record the engagement edge after the roll resolves.
+- `createChatMessage` / `renderChatMessageHTML` — attach and render the outnumbering breakdown panel; suppress the damage row on Dodge-Disengage opposed defense cards (no damage is awarded per Core p.165).
+- `combatRound` — prune stale engagements at the start of each new round.
+- `deleteCombat`, `deleteToken` — cleanup hooks.
+- `updateToken` — auto-disengage on out-of-reach movement.
+- `preUpdateToken` — intercept moves that would leave engagement reach and open the Disengage/Flee decision dialog.
+- `renderTokenHUD` — add the Disengage and Flee buttons to the Token HUD.
+
+Cross-client coordination:
+
+- **Socket layer** (namespace: `module.wfrp4e-engaged-in-melee`, requires `"socket": true` in manifest) — handles GM-authoritative writes to the engagement graph, Engaged status effect toggles, and Advantage mutations on actors the current client doesn't own.
+- **CONFIG.queries** (id: `wfrp4e-engaged-in-melee.opponentDefense`) — routes opponent-side weapon picker and roll dialogs to the opponent's owner client during Dodge-Disengage and Flee. Five-minute timeout so players aren't pressured.
+
+For the full architectural picture, see `ARCHITECTURE.md` at the repo root.
 
 ## License
 

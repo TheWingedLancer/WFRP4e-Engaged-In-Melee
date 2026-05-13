@@ -1,10 +1,17 @@
 /**
  * Constants for wfrp4e-engaged-in-melee.
  *
- * The engagement state is stored as a flag on the active Combat document. This
- * means: (a) it persists across reloads, (b) it syncs to all clients via
- * Foundry's normal document update mechanism, and (c) it cleans itself up when
- * combat ends.
+ * The engagement state is stored as a flag on the active Scene document.
+ * This means: (a) it persists across reloads, (b) it syncs to all clients
+ * via Foundry's normal document update mechanism, and (c) it works whether
+ * or not a Combat is running \u2014 informal skirmishes are tracked too,
+ * pruned by wall-clock time instead of round number.
+ *
+ * State is cleared when:
+ *   - A Combat ends (deleteCombat hook clears everything)
+ *   - A token is deleted (its edges drop)
+ *   - A new round starts with no attacks for an edge (round-based pruning)
+ *   - The skirmishStaleSeconds TTL elapses for a round=0 edge (time-based)
  */
 export const MODULE_ID = "wfrp4e-engaged-in-melee";
 

@@ -32,7 +32,8 @@
  *                           recording, chat breakdown panel, damage suppression
  *   - movement-hooks.js     preUpdateToken (dialog trigger) and updateToken
  *                           (auto-disengage)
- *   - combat-hooks.js       Round-based pruning, combat end, token deletion
+ *   - combat-hooks.js       Round-based pruning, combat end, token deletion,
+ *                           incapacitation-triggered edge clearing
  *   - token-hud.js          Disengage and Flee buttons
  *   - disengage-flee.js     Disengage decision, Flee free-attack loop,
  *                           movement-trigger dialog
@@ -49,7 +50,7 @@ import {
   onCreateChatMessage,
   onRenderChatMessage,
 } from "./roll-hooks.js";
-import { onCombatRound, onDeleteCombat, onDeleteToken } from "./combat-hooks.js";
+import { onCombatRound, onDeleteCombat, onDeleteToken, onCreateActiveEffect } from "./combat-hooks.js";
 import { onUpdateToken, onPreUpdateToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
 import { openDisengageDialog, openFleeDialog, openMovementTriggerDialog } from "./disengage-flee.js";
@@ -73,6 +74,7 @@ function preflightImports() {
     onCombatRound,
     onDeleteCombat,
     onDeleteToken,
+    onCreateActiveEffect,
     onUpdateToken,
     onPreUpdateToken,
     onRenderTokenHUD,
@@ -148,6 +150,7 @@ Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 Hooks.on("combatRound", onCombatRound);
 Hooks.on("deleteCombat", onDeleteCombat);
 Hooks.on("deleteToken", onDeleteToken);
+Hooks.on("createActiveEffect", onCreateActiveEffect);
 
 // Movement-based auto-disengage.
 Hooks.on("updateToken", onUpdateToken);

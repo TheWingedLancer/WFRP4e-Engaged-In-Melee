@@ -33,7 +33,7 @@ scripts/
 │
 ├── roll-hooks.js            renderWeaponDialog/renderTraitDialog injection, post-roll engagement establishment, outnumbering breakdown chat panel, damage-line suppression on Dodge-Disengage cards
 ├── movement-hooks.js        preUpdateToken (dialog trigger) and updateToken (auto-disengage)
-├── combat-hooks.js          combatRound stale-pruning, deleteCombat cleanup, deleteToken cleanup
+├── combat-hooks.js          combatRound stale-pruning, deleteCombat cleanup, deleteToken cleanup, createActiveEffect for incapacitation
 ├── token-hud.js             Disengage and Flee buttons on the Token HUD
 │
 ├── disengage-flee.js        Disengage decision dialog, Flee confirmation, Dodge/Flee flow orchestration, movement-trigger dialog
@@ -68,6 +68,7 @@ Each engagement is stored twice (once on each endpoint) for fast lookup of "who 
 - Skirmish: engagements with `round: 0` are pruned by wall-clock time after a configurable TTL (default 60 seconds).
 - Combat end: all engagements clear (`deleteCombat` hook).
 - Token deletion: that token's edges are dropped (`deleteToken` hook).
+- Token incapacitation (dead, unconscious, defeated): that token's edges drop immediately (`createActiveEffect` hook, v0.1.27). Engaged icons clear on both that token and any survivor whose last engagement was with them.
 
 **Excluded conditions:** `unconscious`, `dead`, and `defeated` exclude an ally from outnumbering counts. Broken/Fleeing characters per Core p.168 CAN still be engaged — they still occupy space and force opponents to deal with them, they just can't take normal actions. Earlier versions excluded Broken too; this was reverted in v0.1.15. Dead and defeated were added in v0.1.26 after a dead orc was observed still counting for outnumbering math at the table.
 
@@ -164,9 +165,9 @@ Two-stage handling:
 
 The damage suppression machinery was introduced in v0.1.22 and made reliable in v0.1.23 (key change: stash by token id instead of actor id, since synthetic tokens have actor-delta ids that can differ from world-actor ids).
 
-### `combatRound`, `deleteCombat`, `deleteToken` → combat-hooks.js
+### `combatRound`, `deleteCombat`, `deleteToken`, `createActiveEffect` → combat-hooks.js
 
-Pruning hooks. All guarded by `shouldHandleStateChange()` which is the active-GM check — only one client should mutate state to avoid races. `combatRound` prunes engagements with no attacks in the new round per Core p.159; `deleteCombat` clears everything; `deleteToken` drops all edges involving the removed token.
+Pruning and cleanup hooks. All guarded by `shouldHandleStateChange()` which is the active-GM check — only one client should mutate state to avoid races. `combatRound` prunes engagements with no attacks in the new round per Core p.159; `deleteCombat` clears everything; `deleteToken` drops all edges involving the removed token; `createActiveEffect` (v0.1.27) drops all edges for a token that just became dead/unconscious/defeated, filtered by overlap between the new effect's `statuses` set and `EXCLUDED_CONDITIONS`.
 
 ### `updateToken` → `onUpdateToken` (movement-hooks.js)
 
@@ -333,6 +334,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.24:** Documentation polish. Fixed stale header comment in `constants.js`. Added per-setting JSDoc to `settings.js`. Added top-of-file architecture summary to `main.js`. Refreshed README's Design notes section. No behavior changes.
 - **v0.1.25:** Defensive hardening from automated code review. Tooltip helper now strips its prior contribution even when current bonus is 0 (prevents stale tooltip when user retargets mid-dialog). `preUpdateToken` proactively prunes stale engagement edges when an opponent token is missing from canvas instead of leaving them for next pruning cycle. `isWeaponMelee` extracted from `reach.js` as a shared helper used by both reach calculation and opponent-defense weapon picker; gives the picker the same weaponGroup fallback for items with missing `attackType`. No observable behavior changes in normal play.
 - **v0.1.26:** Exclude `dead` and `defeated` from outnumbering counts (was only excluding `unconscious`). Movement hooks now also proactively drop edges to incapacitated opponents so the surviving fighter's Engaged status clears at the next move and no spurious Disengage dialogs fire near corpses. Discovered during real Saturday session: a dead orc was still counting for outnumbering math.
+- **v0.1.27:** New `createActiveEffect` hook in `combat-hooks.js` drops all engagement edges instantly when a token's status changes to dead/unconscious/defeated. The Engaged icon now clears at the moment of death rather than waiting for the next move. The reverse transition (healing out of incapacitation) does NOT re-form engagement \u2014 engagement is established by attacks, per Core p.159.
 
 ## Known cleanup candidates
 

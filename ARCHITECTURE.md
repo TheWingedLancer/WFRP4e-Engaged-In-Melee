@@ -69,7 +69,7 @@ Each engagement is stored twice (once on each endpoint) for fast lookup of "who 
 - Combat end: all engagements clear (`deleteCombat` hook).
 - Token deletion: that token's edges are dropped (`deleteToken` hook).
 
-**Excluded conditions:** Only `unconscious` excludes an ally from outnumbering counts. The constants file documents why: Broken/Fleeing characters per Core p.168 CAN still be engaged, and they still occupy space — they just can't take normal actions. Earlier versions excluded Broken too; this was reverted in v0.1.15.
+**Excluded conditions:** `unconscious`, `dead`, and `defeated` exclude an ally from outnumbering counts. Broken/Fleeing characters per Core p.168 CAN still be engaged — they still occupy space and force opponents to deal with them, they just can't take normal actions. Earlier versions excluded Broken too; this was reverted in v0.1.15. Dead and defeated were added in v0.1.26 after a dead orc was observed still counting for outnumbering math at the table.
 
 ## The three pure services
 
@@ -332,6 +332,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.23:** Crossing-threshold model for move-intercept. Advantage writes routed through GM socket. Partial Dodge success keeps all edges. DOM-direct tooltip patching.
 - **v0.1.24:** Documentation polish. Fixed stale header comment in `constants.js`. Added per-setting JSDoc to `settings.js`. Added top-of-file architecture summary to `main.js`. Refreshed README's Design notes section. No behavior changes.
 - **v0.1.25:** Defensive hardening from automated code review. Tooltip helper now strips its prior contribution even when current bonus is 0 (prevents stale tooltip when user retargets mid-dialog). `preUpdateToken` proactively prunes stale engagement edges when an opponent token is missing from canvas instead of leaving them for next pruning cycle. `isWeaponMelee` extracted from `reach.js` as a shared helper used by both reach calculation and opponent-defense weapon picker; gives the picker the same weaponGroup fallback for items with missing `attackType`. No observable behavior changes in normal play.
+- **v0.1.26:** Exclude `dead` and `defeated` from outnumbering counts (was only excluding `unconscious`). Movement hooks now also proactively drop edges to incapacitated opponents so the surviving fighter's Engaged status clears at the next move and no spurious Disengage dialogs fire near corpses. Discovered during real Saturday session: a dead orc was still counting for outnumbering math.
 
 ## Known cleanup candidates
 

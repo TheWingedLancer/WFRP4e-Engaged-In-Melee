@@ -1,6 +1,7 @@
 import { MODULE_ID, SETTINGS } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
 import { getEngagementThreshold, getMoverInterceptThreshold } from "./reach.js";
+import { isInFightingCondition } from "./outnumbering.js";
 import { openMovementTriggerDialog } from "./disengage-flee.js";
 
 /**
@@ -106,6 +107,17 @@ export async function onUpdateToken(tokenDoc, changes) {
       const otherToken = canvas.tokens?.get(otherId);
       if (!otherToken) {
         // Other token isn't on this scene anymore — drop the edge.
+        await tracker.disengage(tokenDoc.id, otherId);
+        continue;
+      }
+      // Also drop edges to opponents who are no longer in fighting condition
+      // (dead, unconscious, defeated). They can't be engaged from either side.
+      if (!isInFightingCondition(otherToken)) {
+        if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+          console.log(
+            `${MODULE_ID} | updateToken: dropping edge to incapacitated ${otherToken.name}`
+          );
+        }
         await tracker.disengage(tokenDoc.id, otherId);
         continue;
       }
@@ -237,6 +249,23 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
         // can't intercept us regardless of graph state.
         tracker.disengage(tokenDoc.id, otherId).catch((err) =>
           console.warn(`${MODULE_ID} | failed to prune stale edge ${otherId}:`, err)
+        );
+        continue;
+      }
+
+      // Skip and prune edges to opponents who are no longer in fighting
+      // condition (dead, unconscious, defeated). A corpse can't intercept a
+      // move, and leaving the edge in the graph would fire a spurious
+      // Disengage dialog every time someone tries to step past the body.
+      // Same fire-and-forget pruning as the off-canvas case above.
+      if (!isInFightingCondition(otherToken)) {
+        if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
+          console.log(
+            `${MODULE_ID} | preUpdateToken: pruning edge to incapacitated opponent ${otherToken.name}`
+          );
+        }
+        tracker.disengage(tokenDoc.id, otherId).catch((err) =>
+          console.warn(`${MODULE_ID} | failed to prune edge to incapacitated opponent ${otherId}:`, err)
         );
         continue;
       }

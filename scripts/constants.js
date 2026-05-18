@@ -56,13 +56,18 @@ export const ENGAGED_STATUS_ID = "engaged";
  * They just can't take normal Actions (their Move and Action must be used to
  * run away).
  *
- * Therefore only Unconscious tokens are excluded from outnumbering math:
- * an unconscious character is genuinely not participating in the fight.
+ * Tokens that ARE excluded:
+ *   - unconscious: at 0 wounds; genuinely not participating in the fight.
+ *   - dead: explicitly killed. The system applies the `dead` status when a
+ *     token is marked dead via the token HUD skull button or by a GM action.
+ *     A corpse doesn't outnumber anyone.
+ *   - defeated: Foundry's generic "out of combat" status, applied by some
+ *     workflows when HP hits 0. Treated the same as dead/unconscious.
  *
  * Condition IDs follow WFRP4e's convention (lowercase). Verify in the system
  * with: CONFIG.statusEffects.map(e => e.id)
  */
-export const EXCLUDED_CONDITIONS = ["unconscious"];
+export const EXCLUDED_CONDITIONS = ["unconscious", "dead", "defeated"];
 
 /**
  * Thresholds for the RAW Outnumbering bonus (Core p.161).

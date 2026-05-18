@@ -133,9 +133,12 @@ export function isMountOf(mountToken, riderToken) {
 }
 
 /**
- * Is this token in fighting condition? Excludes Unconscious and Fleeing.
- * Per the user's design choice, Prone and Stunned still count as engaged
- * threats (they can still throw a punch from the floor).
+ * Is this token in fighting condition? Excludes tokens whose status set
+ * contains any condition ID in EXCLUDED_CONDITIONS (currently unconscious,
+ * dead, defeated). Per Core p.168, Broken/Fleeing characters can still be
+ * engaged with enemies and DO count for outnumbering \u2014 they're still
+ * occupying space and forcing opponents to deal with them. Prone and Stunned
+ * also count as engaged threats (they can still throw a punch from the floor).
  *
  * WFRP4e stores conditions on actor.effects with statuses set. We check both
  * actor.statuses (V12+ canonical location) and effect.statuses for safety.

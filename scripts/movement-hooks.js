@@ -345,3 +345,131 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
     // On error, fall through and allow the move \u2014 don't lock the player out.
   }
 }
+
+/**
+ * Compute a token's projected center from a V13+ movement destination.
+ * `movement.destination` is a TokenPosition: { x, y, elevation, width, height }
+ * where width/height are in grid squares (same units as tokenDoc.width/height).
+ */
+function getCenterFromDestination(tokenDoc, dest) {
+  const w = (dest.width ?? tokenDoc.width) * canvas.grid.sizeX;
+  const h = (dest.height ?? tokenDoc.height) * canvas.grid.sizeY;
+  return { x: dest.x + w / 2, y: dest.y + h / 2 };
+}
+
+/**
+ * Hook: preMoveToken \u2014 V13/V14 movement-trigger dialog.
+ *
+ * This is the V13+ equivalent of onPreUpdateToken. On V14 a raw token
+ * update({x,y}) is superseded by the movement pipeline (and returning false
+ * from preUpdateToken is no longer the clean cancel point), so the gate moves
+ * to the movement layer's own pre-hook. Returning false here cleanly prevents
+ * the move; the token never leaves its origin, so the existing "snap-back"
+ * assumption in the dialog's Cancel / failed-Dodge paths still holds.
+ *
+ * Only ONE of preMoveToken / preUpdateToken is registered (main.js feature-
+ * detects TokenDocument#move), so there is no double-gating.
+ *
+ * @param {TokenDocument} tokenDoc
+ * @param {TokenMovementOperation} movement  waypoints are final; we read .destination
+ * @param {object} operation                 same object passed to move()/update()
+ * @returns {boolean|void}  return false to prevent the move
+ */
+export function onPreMoveToken(tokenDoc, movement, operation) {
+  try {
+    const debug = game.settings.get(MODULE_ID, SETTINGS.DEBUG);
+
+    if (!game.settings.get(MODULE_ID, SETTINGS.ENABLE_MOVEMENT_TRIGGER)) {
+      if (debug) console.log(`${MODULE_ID} | preMoveToken: setting disabled, allowing move`);
+      return;
+    }
+
+    // Bypass flag from our own replay (rides the operation object).
+    if (operation?.bypassEngagementCheck) {
+      if (debug) console.log(`${MODULE_ID} | preMoveToken: bypass flag set, allowing move`);
+      return;
+    }
+
+    const dest = movement?.destination;
+    if (!dest || dest.x === undefined || dest.y === undefined) return;
+
+    const tracker = EngagementTracker.current();
+    if (!tracker) return;
+
+    const engaged = tracker.getEngagementsFor(tokenDoc.id);
+    if (engaged.length === 0) {
+      if (debug) console.log(`${MODULE_ID} | preMoveToken: ${tokenDoc.name} not engaged, allowing move`);
+      return;
+    }
+
+    const movedToken = canvas.tokens?.get(tokenDoc.id);
+    if (!movedToken) return;
+    const projectedCenter = getCenterFromDestination(tokenDoc, dest);
+
+    const floorThreshold = game.settings.get(MODULE_ID, SETTINGS.AUTO_DISENGAGE_DISTANCE);
+    const leavingOpponents = [];
+    const stayingOpponents = [];
+
+    for (const otherId of engaged) {
+      const otherToken = canvas.tokens?.get(otherId);
+      if (!otherToken) {
+        // Stale edge: opponent no longer on canvas. Prune (fire-and-forget;
+        // routes through GM via socket for non-GM clients) and skip.
+        tracker.disengage(tokenDoc.id, otherId).catch((err) =>
+          console.warn(`${MODULE_ID} | failed to prune stale edge ${otherId}:`, err)
+        );
+        continue;
+      }
+      // Incapacitated opponents can't intercept; prune and skip.
+      if (!isInFightingCondition(otherToken)) {
+        tracker.disengage(tokenDoc.id, otherId).catch((err) =>
+          console.warn(`${MODULE_ID} | failed to prune edge to incapacitated opponent ${otherId}:`, err)
+        );
+        continue;
+      }
+
+      // Asymmetric reading (v0.1.22): only the OPPONENT's reach matters for
+      // interception. Crossing-threshold model (v0.1.23): the dialog fires only
+      // when the mover was within reach pre-move and outside it post-move.
+      const reachThreshold = getMoverInterceptThreshold(movedToken, otherToken);
+      const threshold = Math.max(reachThreshold, floorThreshold);
+      const preDist = canvas.grid.measurePath([movedToken.center, otherToken.center])?.distance ?? Infinity;
+      const dist = canvas.grid.measurePath([projectedCenter, otherToken.center])?.distance ?? Infinity;
+      const wasWithinReach = preDist <= threshold;
+      const willBeOutsideReach = dist > threshold;
+
+      if (wasWithinReach && willBeOutsideReach) leavingOpponents.push(otherToken);
+      else stayingOpponents.push(otherToken);
+
+      if (debug) {
+        console.log(
+          `${MODULE_ID} | preMoveToken: ${movedToken.name} vs ${otherToken.name}: ` +
+          `threshold=${threshold}yd (reach=${reachThreshold}, floor=${floorThreshold}), ` +
+          `pre=${preDist.toFixed(1)}yd, post=${dist.toFixed(1)}yd, leaving=${wasWithinReach && willBeOutsideReach}`
+        );
+      }
+    }
+
+    if (leavingOpponents.length === 0) return; // stays within reach \u2014 allow
+
+    if (debug) {
+      console.log(
+        `${MODULE_ID} | preMoveToken: ${movedToken.name} leaving reach of ${leavingOpponents.length} opponent(s); intercepting`
+      );
+    }
+
+    // Launch the existing dialog flow asynchronously; it replays the move via
+    // replayMove (now move()-based) with the bypass flag on a cleared disengage.
+    openMovementTriggerDialog(movedToken, leavingOpponents, stayingOpponents, {
+      targetX: dest.x,
+      targetY: dest.y,
+    }).catch((err) => {
+      console.error(`${MODULE_ID} | movement-trigger dialog error:`, err);
+    });
+
+    return false; // prevent the move
+  } catch (err) {
+    console.error(`${MODULE_ID} | preMoveToken hook error:`, err);
+    // On error, allow the move \u2014 don't lock the player out.
+  }
+}

@@ -51,7 +51,7 @@ import {
   onRenderChatMessage,
 } from "./roll-hooks.js";
 import { onCombatRound, onDeleteCombat, onDeleteToken, onCreateActiveEffect } from "./combat-hooks.js";
-import { onUpdateToken, onPreUpdateToken } from "./movement-hooks.js";
+import { onUpdateToken, onPreUpdateToken, onPreMoveToken } from "./movement-hooks.js";
 import { onRenderTokenHUD } from "./token-hud.js";
 import { openDisengageDialog, openFleeDialog, openMovementTriggerDialog } from "./disengage-flee.js";
 import { getTokenEngagementReach, getEngagementThreshold, getMoverInterceptThreshold } from "./reach.js";
@@ -77,6 +77,7 @@ function preflightImports() {
     onCreateActiveEffect,
     onUpdateToken,
     onPreUpdateToken,
+    onPreMoveToken,
     onRenderTokenHUD,
     openDisengageDialog,
     openFleeDialog,
@@ -157,7 +158,21 @@ Hooks.on("updateToken", onUpdateToken);
 
 // Movement-trigger dialog: intercept moves that would leave engagement reach.
 // Returns false to cancel the move, then opens a dialog asynchronously.
-Hooks.on("preUpdateToken", onPreUpdateToken);
+//
+// V13+ routes positional changes through the movement pipeline, where the
+// clean cancel point is preMoveToken (returning false from preUpdateToken is
+// no longer reliable, and a raw update can be silently reverted). On V14 this
+// is required. We feature-detect TokenDocument#move and register exactly ONE
+// gate so there is no double-dialog; preUpdateToken remains the V12 fallback.
+const tokenDocClass = CONFIG.Token?.documentClass ?? foundry.documents?.TokenDocument;
+const hasMovementApi = typeof tokenDocClass?.prototype?.move === "function";
+if (hasMovementApi) {
+  Hooks.on("preMoveToken", onPreMoveToken);
+  console.log(`${MODULE_ID} | movement gate: preMoveToken (V13+ movement pipeline)`);
+} else {
+  Hooks.on("preUpdateToken", onPreUpdateToken);
+  console.log(`${MODULE_ID} | movement gate: preUpdateToken (V12 fallback)`);
+}
 
 // Manual disengage button.
 Hooks.on("renderTokenHUD", onRenderTokenHUD);

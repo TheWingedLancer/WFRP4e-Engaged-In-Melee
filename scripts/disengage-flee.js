@@ -565,10 +565,21 @@ async function handleUnopposedFlee(token) {
  */
 async function replayMove(token, targetX, targetY) {
   try {
-    await token.document.update(
-      { x: targetX, y: targetY },
-      { bypassEngagementCheck: true }
-    );
+    const doc = token.document;
+    const dest = { x: targetX, y: targetY };
+    const opts = { bypassEngagementCheck: true };
+    // V13+ routes positional changes through the movement pipeline. On V14 a
+    // raw update({x,y}) is superseded by that pipeline and can be silently
+    // reverted (the token reports the new x but snaps back), so we must replay
+    // through TokenDocument#move when it exists. The bypassEngagementCheck flag
+    // rides the operation object and reaches both preMoveToken and the
+    // downstream preUpdateToken, so the replay self-bypasses with no loop.
+    // V12 (no move method) keeps the original update() path.
+    if (typeof doc.move === "function") {
+      await doc.move(dest, opts);
+    } else {
+      await doc.update(dest, opts);
+    }
   } catch (e) {
     console.error(`${MODULE_ID} | replayMove failed:`, e);
   }

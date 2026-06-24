@@ -127,9 +127,9 @@ Three exported functions, all pure:
 
 - **`getEngagementThreshold(tokenA, tokenB)`** — returns `MAX(reachA, reachB)`. **Used for auto-disengage in `updateToken`**: the engagement edge persists as long as either party can still threaten the other.
 
-- **`getMoverInterceptThreshold(mover, opponent)`** — returns `getTokenEngagementReach(opponent)` only, ignoring the mover's reach. **Used for movement-trigger dialog in `preUpdateToken`**: the opponent can only intercept the move if their weapon can reach the mover. This is the asymmetric reading introduced in v0.1.22.
+- **`getMoverInterceptThreshold(mover, opponent)`** — returns `getTokenEngagementReach(opponent)` only, ignoring the mover's reach. **Used by the movement-trigger dialog gate** (`preMoveToken` on V13+, `preUpdateToken` on the V12 fallback): the opponent can only intercept the move if their weapon can reach the mover. This is the asymmetric reading introduced in v0.1.22.
 
-The split matters: in `onPreUpdateToken`, a pike-wielder stepping back from a dagger-wielder gets no dialog (dagger can't intercept). But the engagement edge can still drop in `onUpdateToken` once the pike-wielder is beyond their OWN 6yd reach, since at that point neither party can threaten the other.
+The split matters: in the movement-trigger gate, a pike-wielder stepping back from a dagger-wielder gets no dialog (dagger can't intercept). But the engagement edge can still drop in `onUpdateToken` once the pike-wielder is beyond their OWN 6yd reach, since at that point neither party can threaten the other.
 
 ## The hook integrations
 
@@ -173,13 +173,13 @@ Pruning and cleanup hooks. All guarded by `shouldHandleStateChange()` which is t
 
 Post-move auto-disengage. Iterates over the moved token's engagement edges and uses `getEngagementThreshold` (symmetric MAX) to decide whether to drop each edge. Active-GM gated.
 
-### `preUpdateToken` → `onPreUpdateToken` (movement-hooks.js)
+### Movement-trigger gate (movement-hooks.js)
 
-The movement-trigger dialog hook. This is where the Disengage/Flee dialog opens when a token's move would leave engagement reach.
+The movement-trigger dialog hook — where the Disengage/Flee dialog opens when a token's move would leave engagement reach. The gate is registered on exactly one hook, feature-detected in `main.js` by the presence of `TokenDocument#move`: `preMoveToken` → `onPreMoveToken` on V13+ (required on V14, where a raw positional `update` is superseded by the movement pipeline and can be silently reverted), and `preUpdateToken` → `onPreUpdateToken` as the V12 fallback. Both handlers run the same gating logic below; they differ only in where the destination and bypass flag come from (`movement.destination` / `operation` vs `changes` / `options`).
 
 Several layers of correctness here:
 
-1. **No-op move filter** (v0.1.21): WFRP4e attack resolution sometimes updates a token document with `changes.x`/`changes.y` set to the same value as the current x/y (e.g., for animation refs, hit-effect overlays). The hook compares projected position vs current position and bails if there's no actual change.
+1. **No-op move filter** (v0.1.21, `preUpdateToken` path only): WFRP4e attack resolution sometimes updates a token document with `changes.x`/`changes.y` set to the same value as the current x/y (e.g., for animation refs, hit-effect overlays). The `onPreUpdateToken` handler compares projected position vs current position and bails if there's no actual change. `onPreMoveToken` needs no such filter — `preMoveToken` fires only on real movement, not on incidental document writes.
 
 2. **Crossing-threshold model** (v0.1.23): the dialog fires only when pre-move distance ≤ threshold AND post-move distance > threshold. If the mover was already outside the opponent's reach pre-move, they're not "leaving" — no dialog. This is what makes Igor's pike-wielder not trigger a dialog when stepping back from a dagger-wielding orc he was never actually within reach of.
 
@@ -187,7 +187,7 @@ Several layers of correctness here:
 
 4. **Floor threshold** (configurable setting): `Math.max(reachThreshold, AUTO_DISENGAGE_DISTANCE)`. Defaults to 2yd. Prevents engagement from yo-yoing on tiny moves between tokens with very short reach.
 
-When a dialog needs to fire, the hook calls `openMovementTriggerDialog` and returns `false` to cancel the move. If the user picks "Drop Advantage" or successfully Dodges, the dialog calls `replayMove(token, x, y)` with a `bypassEngagementCheck` flag set on the update so this hook doesn't re-fire on the same move.
+When a dialog needs to fire, the gate calls `openMovementTriggerDialog` and returns `false` to cancel the move. If the user picks "Drop Advantage" or successfully Dodges, the dialog calls `replayMove(token, x, y)`, which re-issues the move with a `bypassEngagementCheck` flag in the operation object so the gate doesn't re-fire on the replay. `replayMove` routes through `TokenDocument#move()` when it exists (V13+, required on V14 where a raw `update` is reverted by the movement pipeline) and falls back to `update()` on V12 (v0.1.28).
 
 ### `renderTokenHUD` → `onRenderTokenHUD` (token-hud.js)
 
@@ -335,6 +335,8 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.25:** Defensive hardening from automated code review. Tooltip helper now strips its prior contribution even when current bonus is 0 (prevents stale tooltip when user retargets mid-dialog). `preUpdateToken` proactively prunes stale engagement edges when an opponent token is missing from canvas instead of leaving them for next pruning cycle. `isWeaponMelee` extracted from `reach.js` as a shared helper used by both reach calculation and opponent-defense weapon picker; gives the picker the same weaponGroup fallback for items with missing `attackType`. No observable behavior changes in normal play.
 - **v0.1.26:** Exclude `dead` and `defeated` from outnumbering counts (was only excluding `unconscious`). Movement hooks now also proactively drop edges to incapacitated opponents so the surviving fighter's Engaged status clears at the next move and no spurious Disengage dialogs fire near corpses. Discovered during real Saturday session: a dead orc was still counting for outnumbering math.
 - **v0.1.27:** New `createActiveEffect` hook in `combat-hooks.js` drops all engagement edges instantly when a token's status changes to dead/unconscious/defeated. The Engaged icon now clears at the moment of death rather than waiting for the next move. The reverse transition (healing out of incapacitation) does NOT re-form engagement \u2014 engagement is established by attacks, per Core p.159.
+- **v0.1.28:** V14 compatibility for the movement-trigger gate. On V14 a raw `token.document.update({x, y})` is superseded by the new movement pipeline and can be silently reverted (the document reports the new x/y but snaps back), so the interception point moves from `preUpdateToken` to the movement layer's own `preMoveToken` hook — new `onPreMoveToken` in `movement-hooks.js` — and the disengage replay (`replayMove` in `disengage-flee.js`) now goes through `TokenDocument#move()` instead of `update()`. `main.js` feature-detects `TokenDocument#move` and registers exactly one gate — `preMoveToken` on V13+, `preUpdateToken` as the V12 fallback — so there is no double-dialog. The gating logic itself is unchanged: same engagement lookup, asymmetric mover-intercept reach (v0.1.22), and crossing-threshold model (v0.1.23); only the hook it runs on and the replay call changed. The `bypassEngagementCheck` flag rides the move operation object and round-trips back into `preMoveToken`, so the replay self-bypasses without re-prompting. `compatibility.verified` stays at 13.351 pending the V14 smoke test.
+- **v0.1.29:** Verified on Foundry V14 — `compatibility.verified` bumped from 13.351 to 14 after the V14 movement-gate smoke test passed (drag-out-of-reach dialog, Drop Advantage / Dodge / Flee replays landing at destination, Cancel / failed-Dodge holding position). Documentation consistency pass: the `getMoverInterceptThreshold` reach-resolver note and the movement-trigger gate section now describe the V13+ `preMoveToken` path with `preUpdateToken` as the V12 fallback, and the no-op move filter is marked as `preUpdateToken`-path-only (unnecessary under `preMoveToken`, which fires only on real movement). No code changes beyond the manifest version/verified bump.
 
 ## Known cleanup candidates
 

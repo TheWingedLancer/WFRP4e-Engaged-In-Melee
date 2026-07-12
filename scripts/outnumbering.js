@@ -14,7 +14,13 @@ import { EXCLUDED_CONDITIONS, OUTNUMBERING_BONUSES } from "./constants.js";
  *   1. Side A = {A} ∪ (allies of A engaged with D)
  *   2. Side D = {D} ∪ (allies of D engaged with A)
  *   3. Filter both sides for fighting-condition tokens.
- *   4. Ratio = |Side A| / |Side D|. Apply the highest matching bonus.
+ *   4. Combat Master (Core p.134-135): if one side is outnumbered, each level
+ *      of the Combat Master talent on a combatant on the SMALLER side adds one
+ *      to that side's effective count. Per the literal reading, this can flip
+ *      the ratio and grant the outnumbering bonus to the Combat-Master side.
+ *      Only applies to the outnumbered side ("only comes into play when you
+ *      are out-numbered").
+ *   5. Ratio = |Side A| / |Side D| (adjusted). Apply the highest matching bonus.
  *
  * Allies are determined by token disposition (matching positive/negative sign).
  */
@@ -174,6 +180,47 @@ function resolveToken(tokenId) {
 }
 
 /**
+ * Read a token's Combat Master talent level.
+ *
+ * WFRP4e stores repeated talents as a single talent item with an
+ * advances.value count (confirmed via real actor data: a character with
+ * Combat Master taken once has system.advances.value === 1). The talent's
+ * max is Agility Bonus (system.max.value === "ag"), but we don't enforce the
+ * cap here \u2014 we trust the stored value, since the system enforces the cap
+ * at character-build time.
+ *
+ * Returns 0 if the token has no Combat Master talent.
+ */
+function getCombatMasterLevel(token) {
+  const items = token?.actor?.items;
+  if (!items) return 0;
+  const talent = items.find(
+    (i) => i.type === "talent" && i.name?.toLowerCase().includes("combat master")
+  );
+  if (!talent) return 0;
+  const level = Number(talent.system?.advances?.value ?? 0);
+  return Number.isFinite(level) && level > 0 ? level : 0;
+}
+
+/**
+ * Sum the Combat Master levels across a list of tokens (one side of a melee).
+ * Returns { total, contributors } where contributors is [{ name, level }] for
+ * tooltip transparency.
+ */
+function sumCombatMasterLevels(tokens) {
+  let total = 0;
+  const contributors = [];
+  for (const token of tokens) {
+    const level = getCombatMasterLevel(token);
+    if (level > 0) {
+      total += level;
+      contributors.push({ name: token.name, level });
+    }
+  }
+  return { total, contributors };
+}
+
+/**
  * Compute the outnumbering bonus for an attack from `attackerToken` against
  * `defenderToken`, using the current engagement tracker.
  *
@@ -185,6 +232,13 @@ function resolveToken(tokenId) {
  *     ratio: string,           // e.g. "2:1", "3:1", "1:1"
  *     attackerSideTokens: Token[],
  *     defenderSideTokens: Token[],
+ *     combatMaster: null | {   // present only when Combat Master adjusted a count
+ *       side: "attacker" | "defender",
+ *       total: number,         // levels added to that side
+ *       contributors: [{ name, level }],
+ *       rawAttackerCount: number,
+ *       rawDefenderCount: number,
+ *     },
  *   }
  */
 export function calculateOutnumbering(attackerToken, defenderToken, tracker) {
@@ -195,6 +249,7 @@ export function calculateOutnumbering(attackerToken, defenderToken, tracker) {
     ratio: "1:1",
     attackerSideTokens: [attackerToken].filter(Boolean),
     defenderSideTokens: [defenderToken].filter(Boolean),
+    combatMaster: null,
   };
 
   if (!attackerToken || !defenderToken || !tracker) return result;
@@ -235,6 +290,41 @@ export function calculateOutnumbering(attackerToken, defenderToken, tracker) {
   result.defenderSideCount = defenderFit ? defenderSide.length : Math.max(0, defenderSide.length - 1);
   result.attackerSideTokens = attackerSide;
   result.defenderSideTokens = defenderSide;
+
+  // ---- Combat Master (Core p.134-135) ----
+  // "For each level in this Talent, you count as one more person for the
+  // purposes of determining if one side out-numbers the other. This Talent
+  // only comes into play when you are out-numbered."
+  //
+  // Literal reading (per table ruling): the smaller side's combatants add
+  // their Combat Master levels to that side's count. This can flip the ratio
+  // and grant the outnumbering bonus to the Combat-Master side. It only
+  // applies to the side that is currently outnumbered (the strictly smaller
+  // one); an even fight (equal counts) gets no Combat Master adjustment.
+  const rawAttackerCount = result.attackerSideCount;
+  const rawDefenderCount = result.defenderSideCount;
+
+  if (rawAttackerCount !== rawDefenderCount) {
+    const attackerIsSmaller = rawAttackerCount < rawDefenderCount;
+    const smallerSideTokens = attackerIsSmaller ? attackerSide : defenderSide;
+    const { total: cmTotal, contributors } = sumCombatMasterLevels(smallerSideTokens);
+
+    if (cmTotal > 0) {
+      if (attackerIsSmaller) {
+        result.attackerSideCount = rawAttackerCount + cmTotal;
+      } else {
+        result.defenderSideCount = rawDefenderCount + cmTotal;
+      }
+      result.combatMaster = {
+        side: attackerIsSmaller ? "attacker" : "defender",
+        total: cmTotal,
+        contributors,
+        rawAttackerCount,
+        rawDefenderCount,
+      };
+    }
+  }
+
   result.ratio = `${result.attackerSideCount}:${Math.max(1, result.defenderSideCount)}`;
 
   if (result.defenderSideCount <= 0) return result;

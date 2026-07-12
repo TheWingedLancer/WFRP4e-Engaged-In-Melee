@@ -100,14 +100,24 @@ A pure function: `calculateOutnumbering(attackerToken, defenderToken, tracker)` 
   ratio: "1:1" | "2:1" | "3:1" | ...,
   attackerSideTokens: Token[],
   defenderSideTokens: Token[],
+  combatMaster: null | {           // present only when Combat Master adjusted a count
+    side: "attacker" | "defender",
+    total: number,                 // levels added to that side
+    contributors: [{ name, level }],
+    rawAttackerCount: number,
+    rawDefenderCount: number,
+  },
 }
 ```
 
 The algorithm, per Core p.161:
 1. Side A = `{attacker} ∪ (attacker's allies engaged with defender)`
 2. Side D = `{defender} ∪ (defender's allies engaged with attacker)`
-3. Filter both sides for tokens in fighting condition (i.e., not Unconscious)
-4. Ratio = ⌊|Side A| / |Side D|⌋. Apply the highest matching bonus from `OUTNUMBERING_BONUSES`.
+3. Filter both sides for tokens in fighting condition (i.e., not Unconscious/dead/defeated)
+4. **Combat Master (Core p.134-135):** if the sides are unequal, sum the Combat Master talent levels (`talent.system.advances.value`) across combatants on the *smaller* (outnumbered) side and add that to the smaller side's count. Only the outnumbered side benefits — an even fight gets no adjustment, and a Combat Master holder on the larger side contributes nothing. Per the literal reading (table ruling), this can push a count past parity and flip the outnumbering bonus to the Combat-Master side. See `getCombatMasterLevel` / `sumCombatMasterLevels`.
+5. Ratio = ⌊|Side A| / |Side D|⌋ (adjusted). Apply the highest matching bonus from `OUTNUMBERING_BONUSES`.
+
+The `combatMaster` field, when populated, drives a transparency note in both the modifier tooltip and the chat-card breakdown panel ("+N from Combat Master on X's side: ...").
 
 **Note on the symmetric reading:** the math counts allies-engaged-with-the-OTHER-side, not allies-engaged-with-each-other. The "common point" is the attacker-defender pair: anyone on your side who is also in melee with the person you're swinging at counts, and anyone on their side who is also in melee with you counts. Allies don't need to be mutually engaged.
 
@@ -337,6 +347,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.27:** New `createActiveEffect` hook in `combat-hooks.js` drops all engagement edges instantly when a token's status changes to dead/unconscious/defeated. The Engaged icon now clears at the moment of death rather than waiting for the next move. The reverse transition (healing out of incapacitation) does NOT re-form engagement \u2014 engagement is established by attacks, per Core p.159.
 - **v0.1.28:** V14 compatibility for the movement-trigger gate. On V14 a raw `token.document.update({x, y})` is superseded by the new movement pipeline and can be silently reverted (the document reports the new x/y but snaps back), so the interception point moves from `preUpdateToken` to the movement layer's own `preMoveToken` hook — new `onPreMoveToken` in `movement-hooks.js` — and the disengage replay (`replayMove` in `disengage-flee.js`) now goes through `TokenDocument#move()` instead of `update()`. `main.js` feature-detects `TokenDocument#move` and registers exactly one gate — `preMoveToken` on V13+, `preUpdateToken` as the V12 fallback — so there is no double-dialog. The gating logic itself is unchanged: same engagement lookup, asymmetric mover-intercept reach (v0.1.22), and crossing-threshold model (v0.1.23); only the hook it runs on and the replay call changed. The `bypassEngagementCheck` flag rides the move operation object and round-trips back into `preMoveToken`, so the replay self-bypasses without re-prompting. `compatibility.verified` stays at 13.351 pending the V14 smoke test.
 - **v0.1.29:** Verified on Foundry V14 — `compatibility.verified` bumped from 13.351 to 14 after the V14 movement-gate smoke test passed (drag-out-of-reach dialog, Drop Advantage / Dodge / Flee replays landing at destination, Cancel / failed-Dodge holding position). Documentation consistency pass: the `getMoverInterceptThreshold` reach-resolver note and the movement-trigger gate section now describe the V13+ `preMoveToken` path with `preUpdateToken` as the V12 fallback, and the no-op move filter is marked as `preUpdateToken`-path-only (unnecessary under `preMoveToken`, which fires only on real movement). No code changes beyond the manifest version/verified bump.
+- **v0.1.30:** Combat Master talent (Core p.134-135) now affects the outnumbering calculation. When a side is outnumbered, each level of Combat Master on that side's combatants adds one to its count. Literal reading (table ruling): can flip the ratio to grant the bonus to the Combat-Master side; only the outnumbered side benefits. Reads `talent.system.advances.value`. Tooltip and chat-card breakdown gained a "+N from Combat Master" transparency note. Smoke-tested across 9 scenarios (negate, flip, even-fight-no-op, larger-side-no-op).
 
 ## Known cleanup candidates
 

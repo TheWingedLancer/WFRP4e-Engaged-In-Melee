@@ -226,7 +226,17 @@ export function onRenderWeaponDialog(dialog, html, data) {
       const sideAWithYou = sideA.replace(attacker.name, "You");
       const ratioText = result.ratio ?? `${sideACount}:${Math.max(1, sideDCount)}`;
       const sign = bonusValue >= 0 ? "+" : "";
-      return `Bonus for outnumbering opponent ${ratioText} (${sign}${bonusValue}): ${sideAWithYou} (${sideACount}) vs Enemy: ${sideD} (${sideDCount}).`;
+      let reason = `Bonus for outnumbering opponent ${ratioText} (${sign}${bonusValue}): ${sideAWithYou} (${sideACount}) vs Enemy: ${sideD} (${sideDCount}).`;
+      // Combat Master transparency (option a): explain the inflated count.
+      const cm = result.combatMaster;
+      if (cm && cm.total > 0) {
+        const who = cm.contributors
+          .map((c) => `${c.name.replace(attacker.name, "You")} (${c.level})`)
+          .join(", ");
+        const sideLabel = cm.side === "attacker" ? "your side" : "the enemy side";
+        reason += ` Includes +${cm.total} from Combat Master on ${sideLabel}: ${who}.`;
+      }
+      return reason;
     }
 
     // Patch the rendered modifier tooltip in the DOM.
@@ -360,6 +370,13 @@ export function onRenderWeaponDialog(dialog, html, data) {
         defenderSideCount: result.defenderSideCount,
         attackerName: attacker.name,
         defenderName: target.name,
+        combatMaster: result.combatMaster
+          ? {
+              side: result.combatMaster.side,
+              total: result.combatMaster.total,
+              contributors: result.combatMaster.contributors,
+            }
+          : null,
         _timestamp: Date.now(),
       });
     }
@@ -585,7 +602,7 @@ export function onRenderChatMessage(message, html) {
 
     const panel = document.createElement("div");
     panel.classList.add(`${MODULE_ID}-breakdown`);
-    panel.innerHTML = `
+    let panelHtml = `
       <div class="outnumbering-header">
         <i class="fas fa-users"></i>
         ${game.i18n.format(`${MODULE_ID}.chat.header`, { bonus: info.bonus })}
@@ -600,6 +617,19 @@ export function onRenderChatMessage(message, html) {
         })}
       </div>
     `;
+    if (info.combatMaster && info.combatMaster.total > 0) {
+      const cm = info.combatMaster;
+      const who = (cm.contributors ?? [])
+        .map((c) => `${c.name} (${c.level})`)
+        .join(", ");
+      const sideLabel = cm.side === "attacker" ? info.attackerName : info.defenderName;
+      panelHtml += `
+        <div class="outnumbering-detail" style="font-style: italic; opacity: 0.9;">
+          +${cm.total} from Combat Master on ${sideLabel}'s side: ${who}
+        </div>
+      `;
+    }
+    panel.innerHTML = panelHtml;
 
     const content = root.querySelector(".message-content") ?? root;
     content.appendChild(panel);

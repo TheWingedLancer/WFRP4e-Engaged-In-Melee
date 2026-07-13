@@ -1,7 +1,7 @@
 import { MODULE_ID, SETTINGS } from "./constants.js";
 import { EngagementTracker } from "./engagement-tracker.js";
 import { getEngagementThreshold, getMoverInterceptThreshold } from "./reach.js";
-import { isInFightingCondition } from "./outnumbering.js";
+import { isInFightingCondition, isSwarm } from "./outnumbering.js";
 import { openMovementTriggerDialog } from "./disengage-flee.js";
 
 /**
@@ -218,6 +218,14 @@ export function onPreUpdateToken(tokenDoc, changes, options, userId) {
       return;
     }
 
+    // Swarm trait (Core p.342): a Swarm "can ignore the Engaged rules when
+    // using its Move." Allow the move without interception. (Damage aspects
+    // of the trait are out of scope for this module.)
+    if (isSwarm(tokenDoc)) {
+      if (debug) console.log(`${MODULE_ID} | preUpdateToken: ${tokenDoc.name} is a Swarm, ignoring Engaged rules for movement`);
+      return;
+    }
+
     if (debug) {
       console.log(`${MODULE_ID} | preUpdateToken: ${tokenDoc.name} engaged with ${engaged.length} token(s); checking reach`);
     }
@@ -399,6 +407,14 @@ export function onPreMoveToken(tokenDoc, movement, operation) {
     const engaged = tracker.getEngagementsFor(tokenDoc.id);
     if (engaged.length === 0) {
       if (debug) console.log(`${MODULE_ID} | preMoveToken: ${tokenDoc.name} not engaged, allowing move`);
+      return;
+    }
+
+    // Swarm trait (Core p.342): a Swarm "can ignore the Engaged rules when
+    // using its Move." It never has to Disengage, so allow the move without
+    // interception. (Damage aspects of the trait are out of scope.)
+    if (isSwarm(tokenDoc)) {
+      if (debug) console.log(`${MODULE_ID} | preMoveToken: ${tokenDoc.name} is a Swarm, ignoring Engaged rules for movement`);
       return;
     }
 

@@ -180,6 +180,36 @@ function resolveToken(tokenId) {
 }
 
 /**
+ * Whether a token's actor has the Swarm creature trait (Core p.342).
+ *
+ * Swarm grants: "can ignore the Engaged rules when using its Move." This
+ * module implements ONLY that movement clause \u2014 a Swarm never has to
+ * Disengage and never triggers the movement-based Disengage dialog. The
+ * damage aspects of the trait (Deathblow on a hit, end-of-round Wound loss
+ * for engaged opponents, +40 to be hit by ranged) are out of scope here.
+ *
+ * WFRP4e stores creature traits as items of type "trait". Swarm may appear
+ * with a specification suffix (e.g. "Swarm (Rats)"), so we match on a name
+ * that starts with "swarm" rather than an exact equality.
+ *
+ * @param {Token|TokenDocument} token
+ * @returns {boolean}
+ */
+export function isSwarm(token) {
+  const actor = token?.actor ?? token?.document?.actor ?? null;
+  const items = actor?.items;
+  if (!items) return false;
+  for (const item of items) {
+    if (item.type !== "trait") continue;
+    const name = item.name?.toLowerCase().trim() ?? "";
+    if (name === "swarm" || name.startsWith("swarm ") || name.startsWith("swarm(")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Read a token's Combat Master talent level.
  *
  * WFRP4e stores repeated talents as a single talent item with an

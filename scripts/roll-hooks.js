@@ -450,36 +450,48 @@ export async function onRollMeleeTest(test, hookName = "rollWeaponTest") {
 }
 
 /**
- * Hook: createChatMessage
+ * Hook: preCreateChatMessage
  *
- * If the dialog hook stashed a breakdown for this attacker, copy it onto
- * the resulting chat message as a flag so the renderChatMessageHTML hook
- * can decorate the card.
+ * If the dialog hook stashed a breakdown for this attacker, write it onto the
+ * pending chat message as a flag BEFORE the message is created, using
+ * updateSource (synchronous). This is the critical difference from the old
+ * createChatMessage approach: setting the flag post-creation via setFlag is
+ * async and triggers a SECOND render \u2014 the first renderChatMessageHTML fires
+ * before the flag lands (no panel), and the later re-render that has the flag
+ * often appends to a replaced/detached node, so the panel never appears. By
+ * mutating the pending document's source here, the flag is baked in before the
+ * first render, so renderChatMessageHTML sees it on the very first pass.
+ *
+ * preCreateChatMessage fires only on the initiating client, which is also the
+ * client that populated the stash during dialog render \u2014 so the stash entry
+ * is local and available here. Foundry then syncs the flag (now part of the
+ * created document) to all other clients automatically.
+ *
+ * Signature: (document, data, options, userId). We mutate `document` via
+ * updateSource; we do not return false (that would cancel message creation).
+ *
+ * @param {ChatMessage} message  the pending chat message document
  */
-export async function onCreateChatMessage(message) {
+export function onPreCreateChatMessage(message) {
   try {
     const speakerActorId = message.speaker?.actor;
     const speakerTokenId = message.speaker?.token;
 
-    // Suppress-damage marker for Dodge-Disengage defense rolls. The marker
-    // is keyed by token id (stable across linked/synthetic actors and matches
-    // message.speaker.token). The client that created the chat message is
-    // also the client that populated the stash (both happen during
-    // runOpponentTestLocally), so the stash entry is local to this client.
-    //
-    // We do NOT gate this on isGM \u2014 the message author (player or GM) is
-    // the one who can set flags on their own message. Once the flag lands,
-    // Foundry's normal document sync propagates it to all other clients so
-    // their renderChatMessageHTML hooks can hide the damage UI too.
+    // Suppress-damage marker for Dodge-Disengage defense rolls. Keyed by token
+    // id (stable across linked/synthetic actors, matches message.speaker.token).
+    // Writing via updateSource here (pre-create) means the first render already
+    // sees the flag, so the damage UI is hidden on the first pass.
     if (speakerTokenId) {
       const suppressStash = globalThis[`__${MODULE_ID}_suppressDamage`];
       if (suppressStash && suppressStash.has(speakerTokenId)) {
         const entry = suppressStash.get(speakerTokenId);
         if (Date.now() - entry._timestamp <= 5000) {
           try {
-            await message.setFlag(MODULE_ID, FLAGS.SUPPRESS_DAMAGE_DISPLAY, true);
+            message.updateSource({
+              [`flags.${MODULE_ID}.${FLAGS.SUPPRESS_DAMAGE_DISPLAY}`]: true,
+            });
           } catch (err) {
-            console.warn(`${MODULE_ID} | could not set suppress-damage flag on message:`, err);
+            console.warn(`${MODULE_ID} | could not set suppress-damage flag on pending message:`, err);
           }
         }
         suppressStash.delete(speakerTokenId);
@@ -502,12 +514,20 @@ export async function onCreateChatMessage(message) {
     const cleanBreakdown = { ...breakdown };
     delete cleanBreakdown._timestamp;
 
-    if (game.user.isGM) {
-      await message.setFlag(MODULE_ID, FLAGS.OUTNUMBERING_INFO, cleanBreakdown);
+    // Write the outnumbering breakdown into the pending document's source.
+    // No isGM gate: the message author owns the pending document and can
+    // mutate its source before creation regardless of GM status. Foundry
+    // syncs the resulting flag to all clients.
+    try {
+      message.updateSource({
+        [`flags.${MODULE_ID}.${FLAGS.OUTNUMBERING_INFO}`]: cleanBreakdown,
+      });
+    } catch (err) {
+      console.warn(`${MODULE_ID} | could not set outnumbering flag on pending message:`, err);
     }
     pending.delete(speakerActorId);
   } catch (err) {
-    console.error(`${MODULE_ID} | createChatMessage hook error:`, err);
+    console.error(`${MODULE_ID} | preCreateChatMessage hook error:`, err);
   }
 }
 

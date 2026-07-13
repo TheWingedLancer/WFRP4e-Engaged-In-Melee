@@ -163,17 +163,16 @@ There is also a "system rebaseline detection" path: when the user toggles Chargi
 
 Fired after the test resolves. The handler records the engagement edge (attacker ↔ each target) by calling `tracker.engage(...)`. This is where engagement is actually established — *not* at attack-dialog open.
 
-WFRP4e does not fire `preRoll` hooks (verified empirically). The `wfrp4e:rollXTest` hooks fire post-roll on all clients. The handler also stashes the outnumbering breakdown in a per-actor `__pending` map keyed by speakerActorId, so the next `createChatMessage` hook can attach it as a flag.
+WFRP4e does not fire `preRoll` hooks (verified empirically). The `wfrp4e:rollXTest` hooks fire post-roll on all clients. The handler also stashes the outnumbering breakdown in a per-actor `__pending` map keyed by speakerActorId, so the next `preCreateChatMessage` hook can attach it as a flag.
 
-### `createChatMessage` and `renderChatMessageHTML` → `onCreateChatMessage`, `onRenderChatMessage`
+### `preCreateChatMessage` and `renderChatMessageHTML` → `onPreCreateChatMessage`, `onRenderChatMessage`
 
 Two-stage handling:
 
-- **`createChatMessage`** (GM only, for outnumbering): reads the pending breakdown for the speaker actor and writes it as a flag on the new message. Document flag syncs to all clients automatically.
-- **`createChatMessage`** (any client, for damage suppression): if a damage-suppression marker exists for the speaker token id (set by `runOpponentTestLocally` in opponent-defense.js when running a Dodge-defense roll), writes the `SUPPRESS_DAMAGE_DISPLAY` flag on the message. The message author has flag-write permission on their own messages.
-- **`renderChatMessageHTML`** (all clients): reads both flags. For outnumbering, appends an info panel showing attacker/defender/ratio/bonus. For damage suppression, hides damage/hit-location/qualities rows and the Apply Damage button, then appends "*Disengage defense — no damage applied (Core p.165).*"
+- **`preCreateChatMessage`** (initiating client): reads the pending breakdown for the speaker actor (outnumbering) and the damage-suppression marker for the speaker token id, and writes each as a flag on the PENDING message via `message.updateSource(...)` \u2014 synchronously, before the document is created. This is deliberate (v0.1.32): the earlier `createChatMessage` + `await setFlag()` approach wrote the flag AFTER creation, triggering a second render, and on V14 the first render (no flag) produced no panel while the flag-bearing re-render appended to a detached node. Writing into the pending source guarantees the flag is present on the first render. The flag becomes part of the created document and syncs to all clients automatically; no isGM gate is needed because the message author owns the pending document.
+- **`renderChatMessageHTML`** (all clients): reads both flags. For outnumbering, appends an info panel showing attacker/defender/ratio/bonus (plus a Combat Master note when present). For damage suppression, hides damage/hit-location/qualities rows and the Apply Damage button, then appends "*Disengage defense — no damage applied (Core p.165).*"
 
-The damage suppression machinery was introduced in v0.1.22 and made reliable in v0.1.23 (key change: stash by token id instead of actor id, since synthetic tokens have actor-delta ids that can differ from world-actor ids).
+The damage suppression machinery was introduced in v0.1.22 and made reliable in v0.1.23 (key change: stash by token id instead of actor id, since synthetic tokens have actor-delta ids that can differ from world-actor ids). The pre-create flag-write timing fix came in v0.1.32.
 
 ### `combatRound`, `deleteCombat`, `deleteToken`, `createActiveEffect` → combat-hooks.js
 
@@ -349,6 +348,7 @@ Notable design rationales worth remembering, scattered throughout the codebase:
 - **v0.1.29:** Verified on Foundry V14 — `compatibility.verified` bumped from 13.351 to 14 after the V14 movement-gate smoke test passed (drag-out-of-reach dialog, Drop Advantage / Dodge / Flee replays landing at destination, Cancel / failed-Dodge holding position). Documentation consistency pass: the `getMoverInterceptThreshold` reach-resolver note and the movement-trigger gate section now describe the V13+ `preMoveToken` path with `preUpdateToken` as the V12 fallback, and the no-op move filter is marked as `preUpdateToken`-path-only (unnecessary under `preMoveToken`, which fires only on real movement). No code changes beyond the manifest version/verified bump.
 - **v0.1.30:** Combat Master talent (Core p.134-135) now affects the outnumbering calculation. When a side is outnumbered, each level of Combat Master on that side's combatants adds one to its count. Literal reading (table ruling): can flip the ratio to grant the bonus to the Combat-Master side; only the outnumbered side benefits. Reads `talent.system.advances.value`. Tooltip and chat-card breakdown gained a "+N from Combat Master" transparency note. Smoke-tested across 9 scenarios (negate, flip, even-fight-no-op, larger-side-no-op). NOTE: this release never installed cleanly due to a stale `download` URL in the manifest (see v0.1.31).
 - **v0.1.31:** Manifest URL fix. The `download` field was hardcoded to `releases/download/v0.1.29/module.zip`, so every install \u2014 regardless of version \u2014 fetched and extracted the v0.1.29 zip, silently reverting to 0.1.29. Both `manifest` and `download` now use the version-independent `releases/latest/download/...` form, which auto-resolves to the newest release and prevents this class of bug recurring. Carries forward the v0.1.30 Combat Master code (which had not successfully installed anywhere).
+"version": "0.1.32",
 
 ## Known cleanup candidates
 

@@ -47,7 +47,7 @@ import { calculateOutnumbering } from "./outnumbering.js";
 import {
   onRenderWeaponDialog,
   onRollMeleeTest,
-  onCreateChatMessage,
+  onPreCreateChatMessage,
   onRenderChatMessage,
 } from "./roll-hooks.js";
 import { onCombatRound, onDeleteCombat, onDeleteToken, onCreateActiveEffect } from "./combat-hooks.js";
@@ -69,7 +69,7 @@ function preflightImports() {
     calculateOutnumbering,
     onRenderWeaponDialog,
     onRollMeleeTest,
-    onCreateChatMessage,
+    onPreCreateChatMessage,
     onRenderChatMessage,
     onCombatRound,
     onDeleteCombat,
@@ -144,7 +144,7 @@ Hooks.on("wfrp4e:rollWeaponTest", (test) => onRollMeleeTest(test, "rollWeaponTes
 Hooks.on("wfrp4e:rollTraitTest", (test) => onRollMeleeTest(test, "rollTraitTest"));
 
 // Chat message lifecycle: attach breakdown flag, then render the panel.
-Hooks.on("createChatMessage", onCreateChatMessage);
+Hooks.on("preCreateChatMessage", onPreCreateChatMessage);
 Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 
 // Combat lifecycle.

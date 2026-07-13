@@ -187,7 +187,7 @@ async function runOpponentTestLocally({ token, mode, contextLabel, appendTitle, 
   // For Dodge-Disengage defense rolls: the system's chat card includes a
   // Damage line and an Apply Damage button. Per RAW (Core p.165), no damage
   // is awarded on these opposed tests \u2014 only Advantage shifts. Stash a
-  // marker so onCreateChatMessage can flag the resulting message for the
+  // marker so onPreCreateChatMessage can flag the resulting message for the
   // damage-suppression render hook.
   //
   // Important: we key by TOKEN id (not actor id) because synthetic
@@ -197,10 +197,11 @@ async function runOpponentTestLocally({ token, mode, contextLabel, appendTitle, 
   //
   // The stash lives only on whichever client called runOpponentTestLocally
   // \u2014 that's also the client that test.roll() will create the chat message
-  // on, so onCreateChatMessage will see the same stash entry. Other clients
-  // receiving the message via sync find their (local, empty) stash and
-  // no-op. 5-second TTL prevents leaking onto unrelated rolls if a test is
-  // cancelled mid-flight.
+  // on, so onPreCreateChatMessage will see the same stash entry and bake the
+  // flag into the pending document via updateSource. Other clients receiving
+  // the created message (flag already present) render correctly; their own
+  // local stash is empty and no-ops. 5-second TTL prevents leaking onto
+  // unrelated rolls if a test is cancelled mid-flight.
   if (mode === "defense") {
     const stash = (globalThis[`__${MODULE_ID}_suppressDamage`] ||= new Map());
     stash.set(token.id, { _timestamp: Date.now() });

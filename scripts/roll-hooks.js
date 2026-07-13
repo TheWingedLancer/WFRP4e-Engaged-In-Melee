@@ -359,27 +359,11 @@ export function onRenderWeaponDialog(dialog, html, data) {
       }
     }
 
-    // Stash the breakdown so we can surface it on the chat card after the roll.
-    if (result.bonus !== 0) {
-      const pending = globalThis[`__${MODULE_ID}_pending`] ?? new Map();
-      globalThis[`__${MODULE_ID}_pending`] = pending;
-      pending.set(attacker.actor?.id ?? attacker.id, {
-        bonus: result.bonus,
-        ratio: result.ratio,
-        attackerSideCount: result.attackerSideCount,
-        defenderSideCount: result.defenderSideCount,
-        attackerName: attacker.name,
-        defenderName: target.name,
-        combatMaster: result.combatMaster
-          ? {
-              side: result.combatMaster.side,
-              total: result.combatMaster.total,
-              contributors: result.combatMaster.contributors,
-            }
-          : null,
-        _timestamp: Date.now(),
-      });
-    }
+    // NOTE: We no longer stash the breakdown here at dialog-render time.
+    // Stashing moved to onRollMeleeTest (post-roll, immediately before message
+    // creation) to eliminate the intermittent-panel bug: the old dialog-render
+    // stash relied on a short TTL that a deliberating player could exceed
+    // before committing the roll. See onRollMeleeTest for the stash.
 
     if (game.settings.get(MODULE_ID, SETTINGS.DEBUG)) {
       console.log(`${MODULE_ID} | renderWeaponDialog: ${attacker.name} -> ${target.name}: outnumbering ${result.ratio} bonus +${result.bonus} (delta ${delta >= 0 ? '+' : ''}${delta}); dialog.fields.modifier now ${dialog.fields.modifier}`);
@@ -435,6 +419,43 @@ export async function onRollMeleeTest(test, hookName = "rollWeaponTest") {
         console.log(`${MODULE_ID} | ${hookName}: missing attacker (${attacker?.name}) or target (${target?.name})`);
       }
       return;
+    }
+
+    // Stash the outnumbering breakdown NOW, immediately before the system
+    // creates the chat message. This replaces the older approach of stashing
+    // during dialog render, which relied on a 5-second TTL that a player could
+    // easily exceed while deliberating in the attack dialog (choosing
+    // difficulty, Charging, reading the tooltip) \u2014 producing the intermittent
+    // "panel sometimes missing" behavior seen in live play. Computing here
+    // shrinks the stash->message-creation gap to milliseconds.
+    //
+    // We compute against the CURRENT engagement graph, BEFORE recording this
+    // attack's own edge (below), so the breakdown matches what the dialog
+    // tooltip showed. calculateOutnumbering is a cheap pure function.
+    try {
+      const breakdown = calculateOutnumbering(attacker, target, tracker);
+      if (breakdown && breakdown.bonus !== 0) {
+        const pending = globalThis[`__${MODULE_ID}_pending`] ?? new Map();
+        globalThis[`__${MODULE_ID}_pending`] = pending;
+        pending.set(attacker.actor?.id ?? attacker.id, {
+          bonus: breakdown.bonus,
+          ratio: breakdown.ratio,
+          attackerSideCount: breakdown.attackerSideCount,
+          defenderSideCount: breakdown.defenderSideCount,
+          attackerName: attacker.name,
+          defenderName: target.name,
+          combatMaster: breakdown.combatMaster
+            ? {
+                side: breakdown.combatMaster.side,
+                total: breakdown.combatMaster.total,
+                contributors: breakdown.combatMaster.contributors,
+              }
+            : null,
+          _timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | ${hookName}: could not stash outnumbering breakdown:`, err);
     }
 
     // Record the engagement edge.
@@ -506,7 +527,7 @@ export function onPreCreateChatMessage(message) {
     const breakdown = pending.get(speakerActorId);
     if (!breakdown) return;
 
-    if (Date.now() - breakdown._timestamp > 5000) {
+    if (Date.now() - breakdown._timestamp > 30000) {
       pending.delete(speakerActorId);
       return;
     }
